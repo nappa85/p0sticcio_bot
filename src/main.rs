@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 
 use serde_json::json;
 
-use tokio::{sync::RwLock, time};
+use tokio::time;
 
 use tracing::{debug, error, info};
 
@@ -14,7 +14,7 @@ static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
 static BOT_TOKEN: Lazy<String> = Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
-static LAST_TIMESTAMP: Lazy<RwLock<u64>> = Lazy::new(Default::default);
+
 
 #[tokio::main]
 async fn main() {
@@ -33,6 +33,7 @@ async fn main() {
 
     let client = reqwest::Client::new();
     let mut interval = time::interval(Duration::from_secs(60));
+    let mut last_timestamp = 0;
     loop {
         interval.tick().await;
         if let Ok(res) = intel.get_plexts([45362997, 12066414], [45747158, 12939141], Tab::All).await {
@@ -41,10 +42,6 @@ async fn main() {
                 continue;
             }
 
-            let last_timestamp = {
-                let lock = LAST_TIMESTAMP.read().await;
-                *lock
-            };
             for (_id, time, plext) in res.result.iter().rev() {
                 if last_timestamp > 0 && *time > last_timestamp {
                     client.post(&url)
@@ -62,8 +59,8 @@ async fn main() {
                     debug!("plext time {} and last_timestamp {}", time, last_timestamp);
                 }
             }
-            let mut lock = LAST_TIMESTAMP.write().await;
-            *lock = res.result.first().map(|(_, t, _)| *t).unwrap_or_default();
+
+            last_timestamp = res.result.first().map(|(_, t, _)| *t).unwrap_or_default();
         }
     }
 }
