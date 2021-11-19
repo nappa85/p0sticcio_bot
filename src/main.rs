@@ -21,7 +21,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
     let url = format!("https://api.telegram.org/bot{}/sendMessage", BOT_TOKEN.as_str());
 
-    let mut intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
+    let mut intel = Intel::build(USERNAME.as_deref(), PASSWORD.as_deref());
 
     if let Some(cookies) = &*COOKIES {
         for cookie in cookies.split("; ") {
