@@ -60,7 +60,7 @@ async fn main() {
             }
 
             for (_id, time, plext) in res.result.iter().rev() {
-                if last_timestamp > 0 && *time > last_timestamp {
+                if *time > last_timestamp {
                     client.post(&url)
                         .header("Content-Type", "application/json")
                         .json(&json!({
