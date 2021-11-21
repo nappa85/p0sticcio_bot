@@ -1,6 +1,8 @@
 use std::{env, time::Duration};
 
-use ingress_intel_rs::{Intel, plexts::Tab};
+use chrono::Utc;
+
+use ingress_intel_rs::{Intel, plexts::{Markup, Tab}};
 
 use once_cell::sync::Lazy;
 
@@ -15,6 +17,21 @@ static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
 static BOT_TOKEN: Lazy<String> = Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
 
+fn parse_markup(markup: &Markup) -> String {
+    match markup.0.as_str() {
+        "PORTAL" => {
+            let coords = format!("{},{}", markup.1.lat_e6.unwrap_or_default() as f64 / 1000.0, markup.1.lng_e6.unwrap_or_default() as f64 / 1000.0);
+            format!(
+                "<a href=\"https://intel.ingress.com/intel?pll={}\">{}</a> (<a href=\"https://maps.google.it/maps/?q={}\">{}</a>)",
+                coords,
+                markup.1.name.as_deref().unwrap_or_default(),
+                coords,
+                markup.1.address.as_deref().unwrap_or_default()
+            )
+        },
+        _ => markup.1.plain.clone(),
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -33,10 +50,10 @@ async fn main() {
 
     let client = reqwest::Client::new();
     let mut interval = time::interval(Duration::from_secs(60));
-    let mut last_timestamp = 0;
+    let mut last_timestamp = Utc::now().timestamp_millis();
     loop {
         interval.tick().await;
-        if let Ok(res) = intel.get_plexts([45362997, 12066414], [45747158, 12939141], Tab::All).await {
+        if let Ok(res) = intel.get_plexts([45362997, 12066414], [45747158, 12939141], Tab::All, Some(last_timestamp), None).await {
             info!("Got {} plexts", res.result.len());
             if res.result.is_empty() {
                 continue;
@@ -48,7 +65,8 @@ async fn main() {
                         .header("Content-Type", "application/json")
                         .json(&json!({
                             "chat_id": -532100731,
-                            "text": plext.plext.text.as_str(),
+                            "text": plext.plext.markup.iter().map(parse_markup).collect::<Vec<_>>().join(""),
+                            "parse_mode": "HTML"
                         }))
                         .send()
                         .await
