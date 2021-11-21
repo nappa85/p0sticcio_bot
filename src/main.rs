@@ -29,6 +29,13 @@ fn parse_markup(markup: &Markup) -> String {
                 markup.1.address.as_deref().unwrap_or_default()
             )
         },
+        "PLAYER" => {
+            match markup.1.team.as_deref() {
+                Some("ENLIGHTENED") => format!("{}{}", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9F, 0xA2]) }, markup.1.plain),
+                Some("RESISTANCE") => format!("{}{}", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x94, 0xB5]) }, markup.1.plain),
+                _ => markup.1.plain.clone(),
+            }
+        },
         _ => markup.1.plain.clone(),
     }
 }
