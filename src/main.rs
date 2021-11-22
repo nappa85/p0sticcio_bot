@@ -41,13 +41,14 @@ fn parse_markup(markup: &Markup) -> String {
         "TEXT" => {
             match markup.1.plain.as_str() {
                 " captured " => format!(" {}captured ", unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9B, 0xB3]) }),//flag
-                " created a Control Field @" => format!(" {}created a Control Field ", unsafe { String::from_utf8_unchecked(vec![0xE2, 0x96, 0xB3]) }),//triangle up
-                " destroyed a Control Field @" => format!(" {}destroyed a Control Field ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA2, 0x97]) }),//triangle down
+                " created a Control Field @" => format!(" {}created a Control Field ", unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9B, 0x9B]) }),//triangle
+                " destroyed a Control Field @" => format!(" {}destroyed a Control Field ", unsafe { String::from_utf8_unchecked(vec![0xE2, 0xAD, 0x99]) }),//cross
                 " deployed a Resonator on " => format!(" {}deployed a Resonator on ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA7, 0xB1]) }),//bricks
                 " destroyed a Resonator on " => format!(" {}destroyed a Resonator on ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x92, 0xA5]) }),//explosion
                 " destroyed the Link " => format!(" {} destroyed the Link", unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9C, 0x82]) }),//scissors
                 " linked " => format!(" {}linked ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x94, 0x97]) }),//chain
                 "Drone returned to Agent by " => format!("{}Drone returned to Agent by ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9B, 0xB8]) }),//ufo
+                " deployed a Beacon on " =>  format!(" {}deployed a Beacon on ", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9A, 0xA8]) }),//police 
                 _ => markup.1.plain.clone(),
             }
         },
