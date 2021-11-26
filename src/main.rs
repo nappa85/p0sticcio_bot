@@ -59,7 +59,8 @@ async fn main() {
                 }))
                 .send()
                 .await
-                .map_err(|e| error!("{}", e))
+                .and_then(|res| res.error_for_status())
+                .map_err(|e| error!("Telegram error: {}", e))
                 .ok();
         }).await;
     });
