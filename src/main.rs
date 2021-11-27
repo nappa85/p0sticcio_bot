@@ -49,19 +49,22 @@ async fn main() {
         let c = &client;
         let u = &url;
         make_stream(global_rx).throttle(pool).for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
-            c.post(u)
-                .header("Content-Type", "application/json")
-                .json(&json!({
-                    "chat_id": user_id,
-                    "text": msg,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": true
-                }))
-                .send()
-                .await
-                .and_then(|res| res.error_for_status())
-                .map_err(|e| error!("Telegram error: {}", e))
-                .ok();
+            let mut res = None;
+            while res.is_none() {
+                res = c.post(u)
+                    .header("Content-Type", "application/json")
+                    .json(&json!({
+                        "chat_id": user_id,
+                        "text": msg,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": true
+                    }))
+                    .send()
+                    .await
+                    .and_then(|res| res.error_for_status())
+                    .map_err(|e| error!("Telegram error: {}", e))
+                    .ok();
+            }
         }).await;
     });
 
