@@ -49,7 +49,7 @@ async fn main() {
         let c = &client;
         let u = &url;
         make_stream(global_rx).throttle(pool).for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
-            loop {
+            for i in 0..10 {
                 let res = c.post(u)
                     .header("Content-Type", "application/json")
                     .json(&json!({
@@ -60,13 +60,13 @@ async fn main() {
                     }))
                     .send()
                     .await
-                    .map_err(|e| error!("Telegram error: {}\nuser_id: {}\nmessage: {}", e, user_id, msg));
+                    .map_err(|e| error!("Telegram error on retry {}: {}\nuser_id: {}\nmessage: {}", i, e, user_id, msg));
                 if let Ok(res) = res {
                     if res.status().is_success() {
                         break;
                     }
 
-                    error!("Telegram error: {:?}\nuser_id: {}\nmessage: {}", res.text().await, user_id, msg);
+                    error!("Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {}", i, res.text().await, user_id, msg);
                 }
                 time::sleep(Duration::from_secs(1)).await;
             }
