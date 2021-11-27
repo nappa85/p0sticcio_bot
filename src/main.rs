@@ -49,21 +49,20 @@ async fn main() {
         let c = &client;
         let u = &url;
         make_stream(global_rx).throttle(pool).for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
-            let mut res = None;
-            while res.is_none() {
-                res = c.post(u)
+            while c.post(u)
                     .header("Content-Type", "application/json")
                     .json(&json!({
                         "chat_id": user_id,
-                        "text": msg,
+                        "text": msg.as_str(),
                         "parse_mode": "HTML",
                         "disable_web_page_preview": true
                     }))
                     .send()
                     .await
                     .and_then(|res| res.error_for_status())
-                    .map_err(|e| error!("Telegram error: {}", e))
-                    .ok();
+                    .map_err(|e| error!("Telegram error: {}\nuser_id: {}\nmessage: {}", e, user_id, msg))
+                    .is_err() {
+                time::sleep(Duration::from_secs(1)).await;
             }
         }).await;
     });
