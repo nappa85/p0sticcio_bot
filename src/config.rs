@@ -174,6 +174,7 @@ pub async fn get() -> Result<Config, ()> {
 mod tests {
     #[tokio::test]
     async fn read() {
+        tracing_subscriber::fmt::try_init().ok();
         super::get().await.unwrap();
     }
 }
