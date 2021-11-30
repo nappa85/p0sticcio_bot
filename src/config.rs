@@ -27,6 +27,7 @@ pub struct Filter {
     #[serde(rename = "minMU")]
     pub min_mu: Option<usize>,
     pub agents: Option<Vec<String>>,
+    pub text: Option<String>,
 }
 
 impl Filter {
@@ -155,6 +156,13 @@ impl Filter {
                     }
                 },
                 _ => {},
+            }
+        }
+        if let Some(text) = &self.text {
+            if let Plext::Unknown(s) = msg {
+                if s.contains(text) {
+                    return true;
+                }
             }
         }
         // default return true if no filters

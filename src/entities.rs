@@ -78,14 +78,14 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                 Plext::CreatedCF {
                     player: (&plext.markup[0]).try_into()?,
                     portal: (&plext.markup[2]).try_into()?,
-                    mu: (&plext.markup[4]).1.plain.parse().map_err(|e| error!("Invalid MU value: {}", e))?,
+                    mu: plext.markup[4].1.plain.parse().map_err(|e| error!("Invalid MU value: {}", e))?,
                 }
             },
             PlextType::DestroyedCF => {
                 Plext::DestroyedCF {
                     player: (&plext.markup[0]).try_into()?,
                     portal: (&plext.markup[2]).try_into()?,
-                    mu: (&plext.markup[4]).1.plain.parse().map_err(|e| error!("Invalid MU value: {}", e))?,
+                    mu: plext.markup[4].1.plain.parse().map_err(|e| error!("Invalid MU value: {}", e))?,
                 }
             },
             PlextType::DeployedReso => {
