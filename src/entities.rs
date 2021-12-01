@@ -2,7 +2,10 @@
 use ingress_intel_rs::plexts::Markup;
 
 use rust_decimal::Decimal;
+
 use tracing::error;
+
+use crate::dedup_flatten::DedupFlatten;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PlextType {
@@ -61,6 +64,7 @@ pub enum Plext<'a> {
     DeployedBeacon { player: Player<'a>, portal: Portal<'a>, },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" deployed Fireworks on "}],["PORTAL",{"plain":"Palazzo Bianco Con Affresco - Tv (Via Sant'Agostino, 27, 31100 Treviso TV, Italy)","name":"Palazzo Bianco Con Affresco - Tv","address":"Via Sant'Agostino, 27, 31100 Treviso TV, Italy","latE6":45666891,"lngE6":12249456,"team":"RESISTANCE"}]]
     DeployedFireworks { player: Player<'a>, portal: Portal<'a>, },
+    MaybeVirus { player: Player<'a>, portal: Portal<'a>, },
     Unknown(&'a str),
 }
 
@@ -147,8 +151,9 @@ impl<'a> std::fmt::Display for Plext<'a> {
             Plext::DestroyedLink { player, source, target } => write!(f, "{} {}destroyed the Link {} to {}", player, unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9C, 0x82]) }, source, target),//scissors
             Plext::Linked { player, source, target } => write!(f, "{} {}linked {} to {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x94, 0x97]) }, source, target),//chain
             Plext::DroneReturn { player } => write!(f, "{}Drone returned to Agent by {}", unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9B, 0xB8]) }, player),//ufo
-            Plext::DeployedBeacon { player, portal } => write!(f, "{} {}deployed a Beacon on {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9A, 0xA8]) }, portal),//police 
-            Plext::DeployedFireworks { player, portal } => write!(f, "{} {}deployed Fireworks on {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x8E, 0x86]) }, portal),//fireworks 
+            Plext::DeployedBeacon { player, portal } => write!(f, "{} {}deployed a Beacon on {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9A, 0xA8]) }, portal),//police
+            Plext::DeployedFireworks { player, portal } => write!(f, "{} {}deployed Fireworks on {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x8E, 0x86]) }, portal),//fireworks
+            Plext::MaybeVirus { player, portal } => write!(f, "{} {}probably used a Virus on {}", player, unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA6, 0xA0]) }, portal),//virus
             Plext::Unknown(s) => write!(f, "{}", s),
         }
     }
@@ -161,6 +166,17 @@ impl<'a> Plext<'a> {
                 others.iter().any(|m| m == &Plext::Captured { player: *player, portal: *portal })
             },
             _ => false,
+        }
+    }
+}
+
+impl<'a> DedupFlatten for Plext<'a> {
+    fn dedup_flatten(self) -> Self {
+        if let Plext::DestroyedReso { player, portal } = self {
+            Plext::MaybeVirus { player, portal }
+        }
+        else {
+            self
         }
     }
 }

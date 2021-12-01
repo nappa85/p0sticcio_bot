@@ -19,6 +19,7 @@ use tokio::{time, sync::mpsc};
 use tracing::{debug, error, info};
 
 mod config;
+mod dedup_flatten;
 mod entities;
 
 static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
@@ -113,8 +114,8 @@ async fn main() {
                     continue;
                 }
 
-                let msgs = res.result.iter().rev().filter_map(|(_id, time, plext)| {
-                    if *time >= last_timestamp[index] {
+                let msgs = dedup_flatten::windows_dedup_flatten(res.result.iter().rev().filter_map(|(_id, time, plext)| {
+                    if *time > last_timestamp[index] {
                         let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
                         entities::Plext::try_from((msg_type, &plext.plext)).ok()
                     }
@@ -122,7 +123,7 @@ async fn main() {
                         debug!("plext time {} and last_timestamp {}", time, last_timestamp[index]);
                         None
                     }
-                }).collect::<Vec<_>>();
+                }).collect::<Vec<_>>(), 8);
                 for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
                     if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
                         for (id, filter) in &zone.users {
