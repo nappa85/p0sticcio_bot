@@ -26,6 +26,13 @@ static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
 static BOT_TOKEN: Lazy<String> = Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
+static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .unwrap()
+});
 
 fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item=T> {
     unfold(rx, |mut rx| async {
@@ -46,12 +53,10 @@ async fn main() {
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
-        let client = reqwest::Client::new();
-        let c = &client;
         let u = &url;
         make_stream(global_rx).throttle(pool).for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
             for i in 0..10 {
-                let res = c.post(u)
+                let res = CLIENT.post(u)
                     .header("Content-Type", "application/json")
                     .json(&json!({
                         "chat_id": user_id,
@@ -92,7 +97,7 @@ async fn main() {
         (id, tx)
     })).flatten().collect::<HashMap<_, _>>();
 
-    let mut intel = Intel::build(USERNAME.as_deref(), PASSWORD.as_deref());
+    let mut intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
 
     if let Some(cookies) = &*COOKIES {
         for cookie in cookies.split("; ") {
