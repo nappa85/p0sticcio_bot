@@ -108,26 +108,26 @@ async fn main() {
     }
 
     let mut interval = time::interval(Duration::from_secs(30));
-    let mut last_timestamp = vec![Utc::now().timestamp_millis(); config.zones.len()];
+    // let mut last_timestamp = vec![Utc::now().timestamp_millis(); config.zones.len()];
     let mut sent_cache: Vec<LruCache<String, ()>> = vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()];//2 minutes cache
     loop {
         for (index, zone) in config.zones.iter().enumerate() {
             interval.tick().await;
-            if let Ok(res) = intel.get_plexts(zone.from, zone.to, Tab::All, Some(last_timestamp[index]), None).await {
+            if let Ok(res) = intel.get_plexts(zone.from, zone.to, Tab::All, Some((Utc::now() - chrono::Duration::seconds(120)).timestamp_millis()), None).await {
                 info!("Got {} plexts", res.result.len());
                 if res.result.is_empty() {
                     continue;
                 }
 
-                let msgs = dedup_flatten::windows_dedup_flatten(res.result.iter().rev().filter_map(|(_id, time, plext)| {
-                    if *time > last_timestamp[index] {
+                let msgs = dedup_flatten::windows_dedup_flatten(res.result.iter().rev().filter_map(|(_id, _time, plext)| {
+                    // if *time > last_timestamp[index] {
                         let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
                         entities::Plext::try_from((msg_type, &plext.plext)).ok()
-                    }
-                    else {
-                        debug!("plext time {} and last_timestamp {}", time, last_timestamp[index]);
-                        None
-                    }
+                    // }
+                    // else {
+                    //     debug!("plext time {} and last_timestamp {}", time, last_timestamp[index]);
+                    //     None
+                    // }
                 }).collect::<Vec<_>>(), 8);
                 for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
                     if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
@@ -147,9 +147,9 @@ async fn main() {
                     }
                 }
 
-                if let Some((_, t, _)) = res.result.first() {
-                    last_timestamp[index] = *t;
-                }
+                // if let Some((_, t, _)) = res.result.first() {
+                //     last_timestamp[index] = *t;
+                // }
             }
         }
     }
