@@ -171,12 +171,9 @@ impl<'a> Plext<'a> {
 }
 
 impl<'a> DedupFlatten for Plext<'a> {
-    fn dedup_flatten(self) -> Self {
-        if let Plext::DestroyedReso { player, portal } = self {
-            Plext::MaybeVirus { player, portal }
-        }
-        else {
-            self
+    fn dedup_flatten(&mut self) {
+        if let Plext::DestroyedReso { player, portal } = *self {
+            *self = Plext::MaybeVirus { player, portal };
         }
     }
 }

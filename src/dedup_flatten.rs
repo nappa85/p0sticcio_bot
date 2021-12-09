@@ -1,36 +1,26 @@
 
 pub trait DedupFlatten: PartialEq {
-    fn dedup_flatten(self) -> Self;
+    fn dedup_flatten(&mut self);
 }
 
-pub fn windows_dedup_flatten<T, X>(items: T, size: usize) -> T
+pub fn windows_dedup_flatten<T>(mut items: Vec<T>, size: usize) -> Vec<T>
 where
-    T: IntoIterator<Item=X> + FromIterator<X>,
-    X: DedupFlatten,
+    T: DedupFlatten,
 {
-     items
-        .into_iter()
-        .scan((None, 0), |prev, elm| {
-            match prev.0.as_ref() {
-                None => {
-                    prev.0 = Some(elm);
-                    prev.1 = 1;
-                    Some(None)
-                },
-                Some(x) if x == &elm => {
-                    prev.1 += 1;
-                    if prev.1 >= size {
-                        Some(Some(elm.dedup_flatten()))
-                    } else {
-                        Some(None)
-                    }
-                },
-                _ => {
-                    let prev_val = prev.0.replace(elm);
-                    Some(prev_val)
-                },
+    let windows = items.windows(size)
+        .enumerate()
+        .filter_map(|(index, e)| {
+            if e.windows(2).any(|e| e[0] != e [1]) {
+                None
+            }
+            else {
+                Some(index)
             }
         })
-        .flatten()
-        .collect::<T>()
+        .collect::<Vec<_>>();
+    for window in windows.into_iter().rev() {
+        items[window].dedup_flatten();
+        items.drain((window + 1)..(window + 8));
+    }
+    items
 }
