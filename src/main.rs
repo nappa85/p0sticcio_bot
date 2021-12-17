@@ -2,9 +2,9 @@ use std::{collections::HashMap, env, future, time::Duration};
 
 use chrono::Utc;
 
-use futures_util::{Stream, StreamExt, stream::unfold};
+use futures_util::{stream::unfold, Stream, StreamExt};
 
-use ingress_intel_rs::{Intel, plexts::Tab};
+use ingress_intel_rs::{plexts::Tab, Intel};
 
 use lru_time_cache::LruCache;
 
@@ -14,7 +14,7 @@ use serde_json::json;
 
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
 
-use tokio::{time, sync::mpsc};
+use tokio::{sync::mpsc, time};
 
 use tracing::{debug, error, info};
 
@@ -25,7 +25,8 @@ mod entities;
 static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
-static BOT_TOKEN: Lazy<String> = Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
+static BOT_TOKEN: Lazy<String> =
+    Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -34,7 +35,7 @@ static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .unwrap()
 });
 
-fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item=T> {
+fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item = T> {
     unfold(rx, |mut rx| async {
         let next = rx.recv().await?;
         Some((next, rx))
@@ -45,7 +46,10 @@ fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item=T> {
 async fn main() {
     println!("Started version {}", env!("CARGO_PKG_VERSION"));
     tracing_subscriber::fmt::init();
-    let url = format!("https://api.telegram.org/bot{}/sendMessage", BOT_TOKEN.as_str());
+    let url = format!(
+        "https://api.telegram.org/bot{}/sendMessage",
+        BOT_TOKEN.as_str()
+    );
     let config = config::get().await.unwrap();
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
@@ -54,48 +58,74 @@ async fn main() {
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
         let u = &url;
-        make_stream(global_rx).throttle(pool).for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
-            for i in 0..10 {
-                let res = CLIENT.post(u)
-                    .header("Content-Type", "application/json")
-                    .json(&json!({
-                        "chat_id": user_id,
-                        "text": msg.as_str(),
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": true
-                    }))
-                    .send()
-                    .await
-                    .map_err(|e| error!("Telegram error on retry {}: {}\nuser_id: {}\nmessage: {}", i, e, user_id, msg));
-                if let Ok(res) = res {
-                    if res.status().is_success() {
-                        break;
-                    }
+        make_stream(global_rx)
+            .throttle(pool)
+            .for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
+                for i in 0..10 {
+                    let res = CLIENT
+                        .post(u)
+                        .header("Content-Type", "application/json")
+                        .json(&json!({
+                            "chat_id": user_id,
+                            "text": msg.as_str(),
+                            "parse_mode": "HTML",
+                            "disable_web_page_preview": true
+                        }))
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            error!(
+                                "Telegram error on retry {}: {}\nuser_id: {}\nmessage: {}",
+                                i, e, user_id, msg
+                            )
+                        });
+                    if let Ok(res) = res {
+                        if res.status().is_success() {
+                            break;
+                        }
 
-                    error!("Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {}", i, res.text().await, user_id, msg);
+                        error!(
+                            "Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {}",
+                            i,
+                            res.text().await,
+                            user_id,
+                            msg
+                        );
+                    }
+                    time::sleep(Duration::from_secs(1)).await;
                 }
-                time::sleep(Duration::from_secs(1)).await;
-            }
-        }).await;
+            })
+            .await;
     });
 
-    let senders = config.zones.iter().map(|z| z.users.iter().map(|(id, _)| {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let global_tx = global_tx.clone();
-        let id = *id;
-        tokio::spawn(async move {
-            // We can send a single message per telegram chat per second
-            let rate = ThrottleRate::new(1, Duration::from_secs(1));
-            let pool = ThrottlePool::new(rate);
-            make_stream(rx).throttle(pool).for_each(|msg| {
-                global_tx.send((id, msg))
-                    .map_err(|e| error!("Sender error: {}", e))
-                    .ok();
-                future::ready(())
-            }).await;
-        });
-        (id, tx)
-    })).flatten().collect::<HashMap<_, _>>();
+    let senders = config
+        .zones
+        .iter()
+        .map(|z| {
+            z.users.iter().map(|(id, _)| {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let global_tx = global_tx.clone();
+                let id = *id;
+                tokio::spawn(async move {
+                    // We can send a single message per telegram chat per second
+                    let rate = ThrottleRate::new(1, Duration::from_secs(1));
+                    let pool = ThrottlePool::new(rate);
+                    make_stream(rx)
+                        .throttle(pool)
+                        .for_each(|msg| {
+                            global_tx
+                                .send((id, msg))
+                                .map_err(|e| error!("Sender error: {}", e))
+                                .ok();
+                            future::ready(())
+                        })
+                        .await;
+                });
+                (id, tx)
+            })
+        })
+        .flatten()
+        .collect::<HashMap<_, _>>();
 
     let mut intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
 
@@ -108,41 +138,61 @@ async fn main() {
     }
 
     let mut interval = time::interval(Duration::from_secs(30));
-    let mut sent_cache: Vec<LruCache<String, ()>> = vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()];//2 minutes cache
+    let mut sent_cache: Vec<LruCache<String, ()>> =
+        vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
     loop {
         for (index, zone) in config.zones.iter().enumerate() {
             interval.tick().await;
-            if let Ok(res) = intel.get_plexts(zone.from, zone.to, Tab::All, Some((Utc::now() - chrono::Duration::seconds(120)).timestamp_millis()), None).await {
+            if let Ok(res) = intel
+                .get_plexts(
+                    zone.from,
+                    zone.to,
+                    Tab::All,
+                    Some((Utc::now() - chrono::Duration::seconds(120)).timestamp_millis()),
+                    None,
+                )
+                .await
+            {
                 debug!("Got {} plexts", res.result.len());
                 if res.result.is_empty() {
                     continue;
                 }
 
-                let plexts = res.result.iter().rev().filter_map(|(_id, _time, plext)| {
-                    let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
-                    entities::Plext::try_from((msg_type, &plext.plext))
-                        .map_err(|_| error!("Unable to create {:?} from {:?}", msg_type, plext.plext))
-                        .ok()
-                }).collect::<Vec<_>>();
+                let plexts = res
+                    .result
+                    .iter()
+                    .rev()
+                    .filter_map(|(_id, _time, plext)| {
+                        let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
+                        entities::Plext::try_from((msg_type, &plext.plext))
+                            .map_err(|_| {
+                                error!("Unable to create {:?} from {:?}", msg_type, plext.plext)
+                            })
+                            .ok()
+                    })
+                    .collect::<Vec<_>>();
                 let msgs = dedup_flatten::windows_dedup_flatten(plexts.clone(), 8);
                 if res.result.len() != msgs.len() {
                     info!("Processed {} plexts: {:?}\nInto {} raw messages: {:?}\nInto {} messages: {:?}", res.result.len(), res.result, plexts.len(), plexts, msgs.len(), msgs);
                 }
 
                 for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
-                    if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
+                    if sent_cache[index]
+                        .notify_insert(msg.to_string(), ())
+                        .0
+                        .is_none()
+                    {
                         for (id, filter) in &zone.users {
                             if filter.apply(msg) {
-                                senders[id].send(msg.to_string())
+                                senders[id]
+                                    .send(msg.to_string())
                                     .map_err(|e| error!("Sender error: {}", e))
                                     .ok();
-                            }
-                            else {
+                            } else {
                                 debug!("Filtered message for user {}: {:?}", id, msg);
                             }
                         }
-                    }
-                    else {
+                    } else {
                         debug!("Blocked duplicate entry {:?}", msg);
                     }
                 }
@@ -166,10 +216,15 @@ mod tests {
             let res: ingress_intel_rs::plexts::IntelResponse = serde_json::from_str(s).unwrap();
             let config = crate::config::get().await.unwrap();
 
-            let plexts = res.result.iter().rev().filter_map(|(_id, _time, plext)| {
-                let msg_type = crate::entities::PlextType::from(plext.plext.markup.as_slice());
-                crate::entities::Plext::try_from((msg_type, &plext.plext)).ok()
-            }).collect::<Vec<_>>();
+            let plexts = res
+                .result
+                .iter()
+                .rev()
+                .filter_map(|(_id, _time, plext)| {
+                    let msg_type = crate::entities::PlextType::from(plext.plext.markup.as_slice());
+                    crate::entities::Plext::try_from((msg_type, &plext.plext)).ok()
+                })
+                .collect::<Vec<_>>();
             let len = plexts.len();
             let msgs = crate::dedup_flatten::windows_dedup_flatten(plexts, 8);
             assert_eq!(len, msgs.len());
@@ -178,9 +233,11 @@ mod tests {
                     for (id, filter) in &zone.users {
                         if filter.apply(msg) {
                             info!("Sent message to user {} in zone {}: {:?}", id, index, msg);
-                        }
-                        else {
-                            debug!("Filtered message for user {} in zone {}: {:?}", id, index, msg);
+                        } else {
+                            debug!(
+                                "Filtered message for user {} in zone {}: {:?}",
+                                id, index, msg
+                            );
                         }
                     }
                 }

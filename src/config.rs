@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 use rust_decimal::Decimal;
@@ -38,27 +37,27 @@ impl Filter {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::CreatedCF { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedCF { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedReso { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedReso { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedLink { source, target, .. } => {
                     if portals.contains(&source.get_coords()) {
                         return true;
@@ -66,7 +65,7 @@ impl Filter {
                     if portals.contains(&target.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::Linked { source, target, .. } => {
                     if portals.contains(&source.get_coords()) {
                         return true;
@@ -74,18 +73,18 @@ impl Filter {
                     if portals.contains(&target.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedBeacon { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedFireworks { portal, .. } => {
                     if portals.contains(&portal.get_coords()) {
                         return true;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
         if let Some(min_mu) = &self.min_mu {
@@ -94,13 +93,13 @@ impl Filter {
                     if mu > min_mu {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedCF { mu, .. } => {
                     if mu > min_mu {
                         return true;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
         if let Some(agents) = &self.agents {
@@ -109,53 +108,53 @@ impl Filter {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::CreatedCF { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedCF { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedReso { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedReso { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DestroyedLink { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::Linked { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DroneReturn { player } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedBeacon { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
+                }
                 Plext::DeployedFireworks { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
         if let Some(text) = &self.text {
@@ -172,9 +171,13 @@ impl Filter {
 
 /// reads config file
 pub async fn get() -> Result<Config, ()> {
-    let mut file = File::open("config.yaml").await.map_err(|e| eprintln!("Error opening file config.yaml: {}", e))?;
+    let mut file = File::open("config.yaml")
+        .await
+        .map_err(|e| eprintln!("Error opening file config.yaml: {}", e))?;
     let mut contents = String::new();
-    file.read_to_string(&mut contents).await.map_err(|e| eprintln!("Error reading file config.yaml: {}", e))?;
+    file.read_to_string(&mut contents)
+        .await
+        .map_err(|e| eprintln!("Error reading file config.yaml: {}", e))?;
     serde_yaml::from_str(&contents).map_err(|e| eprintln!("Error decoding file config.yaml: {}", e))
 }
 
