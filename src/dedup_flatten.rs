@@ -19,7 +19,7 @@ where
         .collect::<Vec<_>>();
     for window in windows.into_iter().rev() {
         items[window].dedup_flatten();
-        items.drain((window + 1)..(window + 8));
+        items.drain((window + 1)..(window + size));
     }
     items
 }
