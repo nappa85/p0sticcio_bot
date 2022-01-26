@@ -138,6 +138,8 @@ async fn main() {
         })).await;
     }
 
+    intel.login().await.unwrap();
+
     let config = &config;
     let intel = &intel;
     let senders = &senders;
