@@ -2,9 +2,9 @@ use std::{collections::HashMap, env, future, time::Duration};
 
 use chrono::Utc;
 
-use futures_util::{stream::unfold, Stream, StreamExt};
+use futures_util::{stream::unfold, Stream, StreamExt, future::join_all};
 
-use ingress_intel_rs::{plexts::Tab, Intel};
+use ingress_intel_rs::{plexts::Tab, Intel, portal_details::{IntelMod, IntelResonator, IntelPortal}};
 
 use lru_time_cache::LruCache;
 
@@ -21,6 +21,8 @@ use tracing::{debug, error, info};
 mod config;
 mod dedup_flatten;
 mod entities;
+
+type Senders = HashMap<u64, mpsc::UnboundedSender<String>>;
 
 static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
@@ -127,16 +129,28 @@ async fn main() {
         .flatten()
         .collect::<HashMap<_, _>>();
 
-    let mut intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
+    let intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
 
     if let Some(cookies) = &*COOKIES {
-        for cookie in cookies.split("; ") {
-            if let Some((pos, _)) = cookie.match_indices('=').next() {
-                intel.add_cookie(&cookie[0..pos], &cookie[(pos + 1)..]);
-            }
-        }
+        intel.add_cookies(cookies.split("; ").filter_map(|cookie| {
+            let (pos, _) = cookie.match_indices('=').next()?;
+            Some((&cookie[0..pos], &cookie[(pos + 1)..]))
+        })).await;
     }
 
+    let config = &config;
+    let intel = &intel;
+    let senders = &senders;
+    join_all((0_u8..2_u8).map(|i| async move {
+        match i {
+            0 => comm_survey(&config, &intel, &senders).await,
+            1 => portal_survey(&config, &intel, &senders).await,
+            _ => panic!("WTF"),
+        }
+    })).await;
+}
+
+async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
     let mut interval = time::interval(Duration::from_secs(30));
     let mut sent_cache: Vec<LruCache<String, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
@@ -196,6 +210,121 @@ async fn main() {
                         debug!("Blocked duplicate entry {:?}", msg);
                     }
                 }
+            }
+        }
+    }
+}
+
+struct PortalCache {
+    name: String,
+    coords: (f64, f64),
+    mods: Vec<Option<IntelMod>>,
+    resonators: Vec<Option<IntelResonator>>,
+}
+
+impl From<IntelPortal> for PortalCache {
+    fn from(p: IntelPortal) -> Self {
+        PortalCache {
+            name: p.get_name().to_owned(),
+            coords: (p.get_latitude(), p.get_longitude()),
+            mods: p.get_mods().to_vec(),
+            resonators: p.get_resonators().to_vec(),
+        }
+    }
+}
+
+impl PortalCache {
+    fn alarm(&self, other: &Self) -> Option<String> {
+        let old = self.get_mods_count();
+        let new = other.get_mods_count();
+        if old > new {
+            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} mods since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new));
+        }
+
+        let old = self.get_resonators_count();
+        let new = other.get_resonators_count();
+        if old > new {
+            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} resonators since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new));
+        }
+
+        let old = self.get_resonators_energy_sum();
+        let new = other.get_resonators_energy_sum();
+        if old > new {
+            let perc = (old - new) * 100 / self.get_resonators_max_energy_sum();
+            //if perc != 13 {
+                return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, perc));
+            //}
+        }
+
+        None
+    }
+
+    fn get_symbol() -> String {
+        unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9A, 0xA0]) }
+    }
+
+    fn get_mods_count(&self) -> usize {
+        self.mods.iter().filter(|m| m.is_some()).count()
+    }
+
+    fn get_resonators_count(&self) -> usize {
+        self.resonators.iter().filter(|r| r.is_some()).count()
+    }
+
+    fn get_resonators_energy_sum(&self) -> usize {
+        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy() as usize)).sum()
+    }
+
+    fn get_resonators_max_energy_sum(&self) -> usize {
+        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| get_portal_max_energy_by_level(r.get_level()))).sum()
+    }
+}
+
+//should be moved into entities
+fn get_portal_max_energy_by_level(level: u8) -> usize {
+    match level {
+        1 => 1000,
+        2 => 1500,
+        3 => 2000,
+        4 => 2500,
+        5 => 3000,
+        6 => 4000,
+        7 => 5000,
+        8 => 6000,
+        _ => unreachable!(),
+    }
+}
+
+async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
+    let mut portals = HashMap::new();
+    for (_, zone) in config.zones.iter().enumerate() {
+        for (id, filter) in &zone.users {
+            if let Some(ps) = &filter.portals {
+                for p in ps {
+                    let entry = portals.entry(p.as_str()).or_insert_with(Vec::new);
+                    entry.push(*id);
+                }
+            }
+        }
+    }
+    let mut cache: HashMap<&str, PortalCache> = HashMap::with_capacity(portals.len());
+    let mut interval = time::interval(Duration::from_secs(10));
+    loop {
+        for (portal_id, users) in &portals {
+            interval.tick().await;
+            if let Ok(res) = intel.get_portal_details(portal_id).await {
+                let new_cache = PortalCache::from(res.result);
+                if let Some(cached) = cache.get(portal_id) {
+                    if let Some(msg) = cached.alarm(&new_cache) {
+                        for user_id in users {
+                            senders[user_id]
+                                .send(msg.clone())
+                                .map_err(|e| error!("Sender error: {}", e))
+                                .ok();
+                        }
+                    }
+                }
+                cache.insert(*portal_id, new_cache);
             }
         }
     }

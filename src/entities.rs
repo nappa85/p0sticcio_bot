@@ -450,11 +450,11 @@ pub struct Portal<'a> {
     lon: Decimal,
 }
 
-impl<'a> Portal<'a> {
-    pub fn get_coords(&self) -> (Decimal, Decimal) {
-        (self.lat, self.lon)
-    }
-}
+// impl<'a> Portal<'a> {
+//     pub fn get_coords(&self) -> (Decimal, Decimal) {
+//         (self.lat, self.lon)
+//     }
+// }
 
 impl<'a> std::fmt::Display for Portal<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

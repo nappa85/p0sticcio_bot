@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rust_decimal::Decimal;
+// use rust_decimal::Decimal;
 
 use tokio::{fs::File, io::AsyncReadExt};
 
@@ -22,7 +22,8 @@ pub struct Zone {
 
 #[derive(Deserialize)]
 pub struct Filter {
-    pub portals: Option<Vec<(Decimal, Decimal)>>,
+    // pub portals: Option<Vec<(Decimal, Decimal)>>,
+    pub portals: Option<Vec<String>>,
     #[serde(rename = "minMU")]
     pub min_mu: Option<usize>,
     pub agents: Option<Vec<String>>,
@@ -31,62 +32,62 @@ pub struct Filter {
 
 impl Filter {
     pub fn apply(&self, msg: &Plext<'_>) -> bool {
-        if let Some(portals) = &self.portals {
-            match msg {
-                Plext::Captured { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::CreatedCF { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DestroyedCF { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DeployedReso { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DestroyedReso { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DestroyedLink { source, target, .. } => {
-                    if portals.contains(&source.get_coords()) {
-                        return true;
-                    }
-                    if portals.contains(&target.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::Linked { source, target, .. } => {
-                    if portals.contains(&source.get_coords()) {
-                        return true;
-                    }
-                    if portals.contains(&target.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DeployedBeacon { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                Plext::DeployedFireworks { portal, .. } => {
-                    if portals.contains(&portal.get_coords()) {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
+        // if let Some(portals) = &self.portals {
+        //     match msg {
+        //         Plext::Captured { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::CreatedCF { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DestroyedCF { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DeployedReso { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DestroyedReso { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DestroyedLink { source, target, .. } => {
+        //             if portals.contains(&source.get_coords()) {
+        //                 return true;
+        //             }
+        //             if portals.contains(&target.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::Linked { source, target, .. } => {
+        //             if portals.contains(&source.get_coords()) {
+        //                 return true;
+        //             }
+        //             if portals.contains(&target.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DeployedBeacon { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         Plext::DeployedFireworks { portal, .. } => {
+        //             if portals.contains(&portal.get_coords()) {
+        //                 return true;
+        //             }
+        //         }
+        //         _ => {}
+        //     }
+        // }
         if let Some(min_mu) = &self.min_mu {
             match msg {
                 Plext::CreatedCF { mu, .. } => {
