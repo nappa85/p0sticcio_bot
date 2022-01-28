@@ -252,10 +252,10 @@ impl PortalCache {
         let old = self.get_resonators_energy_sum();
         let new = other.get_resonators_energy_sum();
         if old > new {
-            let perc = (old - new) * 100 / self.get_resonators_max_energy_sum();
-            //if perc != 13 {
+            let perc = calc_perc(old - new, self.get_resonators_max_energy_sum());
+            // if perc != 15 || !self.all_resonators_lost_the_same(other, perc) {
                 return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, perc));
-            //}
+            // }
         }
 
         None
@@ -273,17 +273,27 @@ impl PortalCache {
         self.resonators.iter().filter(|r| r.is_some()).count()
     }
 
-    fn get_resonators_energy_sum(&self) -> usize {
-        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy() as usize)).sum()
+    fn get_resonators_energy_sum(&self) -> u16 {
+        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy())).sum()
     }
 
-    fn get_resonators_max_energy_sum(&self) -> usize {
+    fn get_resonators_max_energy_sum(&self) -> u16 {
         self.resonators.iter().filter_map(|r| r.as_ref().map(|r| get_portal_max_energy_by_level(r.get_level()))).sum()
     }
+
+    // fn all_resonators_lost_the_same(&self, other: &Self, perc: u8) -> bool {
+    //     self.resonators.iter().filter_map(|r| r.as_ref())
+    //         .zip(other.resonators.iter().filter_map(|r| r.as_ref()))
+    //         .all(|(old, new)| perc == calc_perc(old.get_energy() - new.get_energy(), get_portal_max_energy_by_level(old.get_level())))
+    // }
+}
+
+fn calc_perc(diff: u16, sum: u16) -> u8 {
+    ((diff as u32) * 100 / (sum as u32)) as u8
 }
 
 //should be moved into entities
-fn get_portal_max_energy_by_level(level: u8) -> usize {
+fn get_portal_max_energy_by_level(level: u8) -> u16 {
     match level {
         1 => 1000,
         2 => 1500,
