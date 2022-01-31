@@ -240,21 +240,23 @@ impl PortalCache {
         let old = self.get_mods_count();
         let new = other.get_mods_count();
         if old > new {
-            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} mods since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new));
+            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} mods since last check ({} remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new, new));
         }
 
         let old = self.get_resonators_count();
         let new = other.get_resonators_count();
         if old > new {
-            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} resonators since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new));
+            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} resonators since last check ({} remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new, new));
         }
 
         let old = self.get_resonators_energy_sum();
         let new = other.get_resonators_energy_sum();
         if old > new {
-            let perc = calc_perc(old - new, self.get_resonators_max_energy_sum());
-            // if perc != 15 || !self.all_resonators_lost_the_same(other, perc) {
-                return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check", Self::get_symbol(), self.coords.0, self.coords.1, self.name, perc));
+            let max = self.get_resonators_max_energy_sum();
+            let lost_perc = calc_perc(old - new, max);
+            // if lost_perc != 15 || !self.all_resonators_lost_the_same(other, lost_perc) {
+                let left_perc = calc_perc(new, max);
+                return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check ({}% remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, lost_perc, left_perc));
             // }
         }
 
