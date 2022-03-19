@@ -1,4 +1,4 @@
-FROM debian:11-slim
+FROM debian:bullseye-slim
 
 RUN apt-get update && apt-get install -y libssl1.1 ca-certificates && rm -rf /var/lib/apt/lists/*
 
