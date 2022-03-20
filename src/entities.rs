@@ -48,66 +48,80 @@ pub enum Plext<'a> {
     Captured {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" created a Control Field @"}],["PORTAL",{"plain":"Villorba-Capitello della Beata Vergine Maria (Via Campagnola, 72B, 31020 Villorba, Treviso, Italy)","name":"Villorba-Capitello della Beata Vergine Maria","address":"Via Campagnola, 72B, 31020 Villorba, Treviso, Italy","latE6":45759495,"lngE6":12230196,"team":"RESISTANCE"}],["TEXT",{"plain":" +"}],["TEXT",{"plain":"204"}],["TEXT",{"plain":" MUs"}]]
     CreatedCF {
         player: Player<'a>,
         portal: Portal<'a>,
         mu: usize,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"signoreoscuro89","team":"RESISTANCE"}],["TEXT",{"plain":" destroyed a Control Field @"}],["PORTAL",{"plain":"Campo da Calcio in Erba Sintetica - Impianti Sportivi Ceron (Via Trasimeno, 8, 35030 Selvazzano Dentro PD, Italy)","name":"Campo da Calcio in Erba Sintetica - Impianti Sportivi Ceron","address":"Via Trasimeno, 8, 35030 Selvazzano Dentro PD, Italy","latE6":45389869,"lngE6":11798346,"team":"RESISTANCE"}],["TEXT",{"plain":" -"}],["TEXT",{"plain":"1620"}],["TEXT",{"plain":" MUs"}]]
     DestroyedCF {
         player: Player<'a>,
         portal: Portal<'a>,
         mu: usize,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" deployed a Resonator on "}],["PORTAL",{"plain":"Oratorio Di Villa Minelli (Via Roma, 136, 31050 Ponzano TV, Italy)","name":"Oratorio Di Villa Minelli","address":"Via Roma, 136, 31050 Ponzano TV, Italy","latE6":45708709,"lngE6":12217027,"team":"RESISTANCE"}]]
     DeployedReso {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" destroyed a Resonator on "}],["PORTAL",{"plain":"Parco Giochi \"saltimbanchi\" - Villorba (Via Po, 22, 31020 Lancenigo TV, Italy)","name":"Parco Giochi \"saltimbanchi\" - Villorba","address":"Via Po, 22, 31020 Lancenigo TV, Italy","latE6":45708103,"lngE6":12244696,"team":"ENLIGHTENED"}]]
     DestroyedReso {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"signoreoscuro89","team":"RESISTANCE"}],["TEXT",{"plain":" destroyed the Link "}],["PORTAL",{"plain":"Campo da Calcio in Erba Sintetica - Impianti Sportivi Ceron (Via Trasimeno, 8, 35030 Selvazzano Dentro PD, Italy)","name":"Campo da Calcio in Erba Sintetica - Impianti Sportivi Ceron","address":"Via Trasimeno, 8, 35030 Selvazzano Dentro PD, Italy","latE6":45389869,"lngE6":11798346,"team":"ENLIGHTENED"}],["TEXT",{"plain":" to "}],["PORTAL",{"plain":"Monumento Agli Alpini (Via IV Novembre, 575, 35035 Mestrino PD, Italy)","name":"Monumento Agli Alpini","address":"Via IV Novembre, 575, 35035 Mestrino PD, Italy","latE6":45443431,"lngE6":11756890,"team":"RESISTANCE"}]]
     DestroyedLink {
         player: Player<'a>,
         source: Portal<'a>,
         target: Portal<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" linked "}],["PORTAL",{"plain":"Villorba-Capitello della Beata Vergine Maria (Via Campagnola, 72B, 31020 Villorba, Treviso, Italy)","name":"Villorba-Capitello della Beata Vergine Maria","address":"Via Campagnola, 72B, 31020 Villorba, Treviso, Italy","latE6":45759495,"lngE6":12230196,"team":"RESISTANCE"}],["TEXT",{"plain":" to "}],["PORTAL",{"plain":"Santandra Capitello della Sacra Famiglia (Via dei Caduti, 3, 31050 Santandr\u00e0 Treviso, Italy)","name":"Santandra Capitello della Sacra Famiglia","address":"Via dei Caduti, 3, 31050 Santandr\u00e0 Treviso, Italy","latE6":45746774,"lngE6":12199663,"team":"RESISTANCE"}]]
     Linked {
         player: Player<'a>,
         source: Portal<'a>,
         target: Portal<'a>,
+        time: i64,
     },
     /// [["TEXT",{"plain":"Drone returned to Agent by "}],["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}]]
     DroneReturn {
         player: Player<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"AmmaNommo","team":"RESISTANCE"}],["TEXT",{"plain":" deployed a Beacon on "}],["PORTAL",{"plain":"Mestre - Biglietteria Stazione FS (Viale Stazione, 10, 30171 Venice, Italy)","name":"Mestre - Biglietteria Stazione FS","address":"Viale Stazione, 10, 30171 Venice, Italy","latE6":45482653,"lngE6":12231524,"team":"RESISTANCE"}]]
     DeployedBeacon {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" deployed Fireworks on "}],["PORTAL",{"plain":"Palazzo Bianco Con Affresco - Tv (Via Sant'Agostino, 27, 31100 Treviso TV, Italy)","name":"Palazzo Bianco Con Affresco - Tv","address":"Via Sant'Agostino, 27, 31100 Treviso TV, Italy","latE6":45666891,"lngE6":12249456,"team":"RESISTANCE"}]]
     DeployedFireworks {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
     MaybeVirus {
         player: Player<'a>,
         portal: Portal<'a>,
+        time: i64,
     },
-    Unknown(&'a str),
+    Unknown {
+        text: &'a str,
+        time: i64,
+    },
 }
 
-impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a> {
+impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plext<'a> {
     type Error = ();
     fn try_from(
-        (pt, plext): (PlextType, &'a ingress_intel_rs::plexts::Plext),
+        (pt, plext, time): (PlextType, &'a ingress_intel_rs::plexts::Plext, i64),
     ) -> Result<Self, Self::Error> {
         Ok(match pt {
             PlextType::Captured => Plext::Captured {
@@ -121,6 +135,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(2)
                     .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::CreatedCF => Plext::CreatedCF {
                 player: plext
@@ -142,6 +157,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                             .parse()
                             .map_err(|e| error!("Invalid MU value: {}", e))
                     })?,
+                time,
             },
             PlextType::DestroyedCF => Plext::DestroyedCF {
                 player: plext
@@ -163,6 +179,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                             .parse()
                             .map_err(|e| error!("Invalid MU value: {}", e))
                     })?,
+                time,
             },
             PlextType::DeployedReso => Plext::DeployedReso {
                 player: plext
@@ -175,6 +192,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(2)
                     .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::DestroyedReso => Plext::DestroyedReso {
                 player: plext
@@ -187,6 +205,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(2)
                     .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::DestroyedLink => Plext::DestroyedLink {
                 player: plext
@@ -204,6 +223,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(4)
                     .ok_or_else(|| error!("Can't find target on markup 4: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::Linked => Plext::Linked {
                 player: plext
@@ -221,6 +241,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(4)
                     .ok_or_else(|| error!("Can't find target on markup 4: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::DroneReturn => Plext::DroneReturn {
                 player: plext
@@ -228,6 +249,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(1)
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::DeployedBeacon => Plext::DeployedBeacon {
                 player: plext
@@ -240,6 +262,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(2)
                     .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
             PlextType::DeployedFireworks => Plext::DeployedFireworks {
                 player: plext
@@ -252,8 +275,12 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
                     .get(2)
                     .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
+                time,
             },
-            PlextType::Unknown => Plext::Unknown(plext.text.as_str()),
+            PlextType::Unknown => Plext::Unknown {
+                text: plext.text.as_str(),
+                time,
+            },
         })
     }
 }
@@ -261,14 +288,16 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext)> for Plext<'a>
 impl<'a> std::fmt::Display for Plext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Plext::Captured { player, portal } => write!(
+            Plext::Captured { player, portal, .. } => write!(
                 f,
                 "{} {}captured {}",
                 player,
                 unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9B, 0xB3]) },
                 portal
             ), //flag
-            Plext::CreatedCF { player, portal, mu } => write!(
+            Plext::CreatedCF {
+                player, portal, mu, ..
+            } => write!(
                 f,
                 "{} {}created a Control Field {} +{}MU",
                 player,
@@ -276,7 +305,9 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 portal,
                 mu
             ), //triangle
-            Plext::DestroyedCF { player, portal, mu } => write!(
+            Plext::DestroyedCF {
+                player, portal, mu, ..
+            } => write!(
                 f,
                 "{} {}destroyed a Control Field {} -{}MU",
                 player,
@@ -284,14 +315,14 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 portal,
                 mu
             ), //cross
-            Plext::DeployedReso { player, portal } => write!(
+            Plext::DeployedReso { player, portal, .. } => write!(
                 f,
                 "{} {}deployed a Resonator on {}",
                 player,
                 unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA7, 0xB1]) },
                 portal
             ), //bricks
-            Plext::DestroyedReso { player, portal } => write!(
+            Plext::DestroyedReso { player, portal, .. } => write!(
                 f,
                 "{} {}destroyed a Resonator on {}",
                 player,
@@ -302,6 +333,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 player,
                 source,
                 target,
+                ..
             } => write!(
                 f,
                 "{} {}destroyed the Link {} to {}",
@@ -314,6 +346,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 player,
                 source,
                 target,
+                ..
             } => write!(
                 f,
                 "{} {}linked {} to {}",
@@ -322,34 +355,34 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 source,
                 target
             ), //chain
-            Plext::DroneReturn { player } => write!(
+            Plext::DroneReturn { player, .. } => write!(
                 f,
                 "{}Drone returned to Agent by {}",
                 unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9B, 0xB8]) },
                 player
             ), //ufo
-            Plext::DeployedBeacon { player, portal } => write!(
+            Plext::DeployedBeacon { player, portal, .. } => write!(
                 f,
                 "{} {}deployed a Beacon on {}",
                 player,
                 unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9A, 0xA8]) },
                 portal
             ), //police
-            Plext::DeployedFireworks { player, portal } => write!(
+            Plext::DeployedFireworks { player, portal, .. } => write!(
                 f,
                 "{} {}deployed Fireworks on {}",
                 player,
                 unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x8E, 0x86]) },
                 portal
             ), //fireworks
-            Plext::MaybeVirus { player, portal } => write!(
+            Plext::MaybeVirus { player, portal, .. } => write!(
                 f,
                 "{} {}probably used a Virus on {}",
                 player,
                 unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA6, 0xA0]) },
                 portal
             ), //virus
-            Plext::Unknown(s) => write!(f, "{}", s),
+            Plext::Unknown { text, .. } => write!(f, "{}", text),
         }
     }
 }
@@ -357,10 +390,15 @@ impl<'a> std::fmt::Display for Plext<'a> {
 impl<'a> Plext<'a> {
     pub fn has_duplicates(&self, others: &[Plext<'a>]) -> bool {
         match self {
-            Plext::DeployedReso { player, portal } => others.iter().any(|m| {
+            Plext::DeployedReso {
+                player,
+                portal,
+                time,
+            } => others.iter().any(|m| {
                 m == &Plext::Captured {
                     player: *player,
                     portal: *portal,
+                    time: *time,
                 }
             }),
             _ => false,
@@ -370,8 +408,17 @@ impl<'a> Plext<'a> {
 
 impl<'a> DedupFlatten for Plext<'a> {
     fn dedup_flatten(&mut self) {
-        if let Plext::DestroyedReso { player, portal } = *self {
-            *self = Plext::MaybeVirus { player, portal };
+        if let Plext::DestroyedReso {
+            player,
+            portal,
+            time,
+        } = *self
+        {
+            *self = Plext::MaybeVirus {
+                player,
+                portal,
+                time,
+            };
         }
     }
 }

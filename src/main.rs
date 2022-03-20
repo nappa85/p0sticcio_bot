@@ -2,9 +2,13 @@ use std::{collections::HashMap, env, future, time::Duration};
 
 use chrono::Utc;
 
-use futures_util::{stream::unfold, Stream, StreamExt, future::join_all};
+use futures_util::{future::join_all, stream::unfold, Stream, StreamExt};
 
-use ingress_intel_rs::{plexts::Tab, Intel, portal_details::{IntelMod, IntelResonator, IntelPortal}};
+use ingress_intel_rs::{
+    plexts::Tab,
+    portal_details::{IntelMod, IntelPortal, IntelResonator},
+    Intel,
+};
 
 use lru_time_cache::LruCache;
 
@@ -132,10 +136,12 @@ async fn main() {
     let intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
 
     if let Some(cookies) = &*COOKIES {
-        intel.add_cookies(cookies.split("; ").filter_map(|cookie| {
-            let (pos, _) = cookie.match_indices('=').next()?;
-            Some((&cookie[0..pos], &cookie[(pos + 1)..]))
-        })).await;
+        intel
+            .add_cookies(cookies.split("; ").filter_map(|cookie| {
+                let (pos, _) = cookie.match_indices('=').next()?;
+                Some((&cookie[0..pos], &cookie[(pos + 1)..]))
+            }))
+            .await;
     }
 
     intel.login().await.unwrap();
@@ -149,7 +155,8 @@ async fn main() {
             1 => portal_survey(&config, &intel, &senders).await,
             _ => panic!("WTF"),
         }
-    })).await;
+    }))
+    .await;
 }
 
 async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
@@ -178,9 +185,9 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                     .result
                     .iter()
                     .rev()
-                    .filter_map(|(_id, _time, plext)| {
+                    .filter_map(|(_id, time, plext)| {
                         let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
-                        entities::Plext::try_from((msg_type, &plext.plext))
+                        entities::Plext::try_from((msg_type, &plext.plext, *time))
                             .map_err(|_| {
                                 error!("Unable to create {:?} from {:?}", msg_type, plext.plext)
                             })
@@ -255,8 +262,8 @@ impl PortalCache {
             let max = self.get_resonators_max_energy_sum();
             let lost_perc = calc_perc(old - new, max);
             // if lost_perc != 15 || !self.all_resonators_lost_the_same(other, lost_perc) {
-                let left_perc = calc_perc(new, max);
-                return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check ({}% remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, lost_perc, left_perc));
+            let left_perc = calc_perc(new, max);
+            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check ({}% remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, lost_perc, left_perc));
             // }
         }
 
@@ -276,11 +283,20 @@ impl PortalCache {
     }
 
     fn get_resonators_energy_sum(&self) -> u16 {
-        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy())).sum()
+        self.resonators
+            .iter()
+            .filter_map(|r| r.as_ref().map(|r| r.get_energy()))
+            .sum()
     }
 
     fn get_resonators_max_energy_sum(&self) -> u16 {
-        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| get_portal_max_energy_by_level(r.get_level()))).sum()
+        self.resonators
+            .iter()
+            .filter_map(|r| {
+                r.as_ref()
+                    .map(|r| get_portal_max_energy_by_level(r.get_level()))
+            })
+            .sum()
     }
 
     // fn all_resonators_lost_the_same(&self, other: &Self, perc: u8) -> bool {
@@ -362,9 +378,9 @@ mod tests {
                 .result
                 .iter()
                 .rev()
-                .filter_map(|(_id, _time, plext)| {
+                .filter_map(|(_id, time, plext)| {
                     let msg_type = crate::entities::PlextType::from(plext.plext.markup.as_slice());
-                    crate::entities::Plext::try_from((msg_type, &plext.plext)).ok()
+                    crate::entities::Plext::try_from((msg_type, &plext.plext, *time)).ok()
                 })
                 .collect::<Vec<_>>();
             let msgs = crate::dedup_flatten::windows_dedup_flatten(plexts, 8);

@@ -142,7 +142,7 @@ impl Filter {
                         return true;
                     }
                 }
-                Plext::DroneReturn { player } => {
+                Plext::DroneReturn { player, .. } => {
                     if agents.iter().any(|s| s == player.get_name()) {
                         return true;
                     }
@@ -160,9 +160,9 @@ impl Filter {
                 _ => {}
             }
         }
-        if let Some(text) = &self.text {
-            if let Plext::Unknown(s) = msg {
-                if s.contains(text) {
+        if let Some(s) = &self.text {
+            if let Plext::Unknown { text, .. } = msg {
+                if text.contains(s) {
                     return true;
                 }
             }
