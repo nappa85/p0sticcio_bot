@@ -166,7 +166,7 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
     loop {
         for (index, zone) in config.zones.iter().enumerate() {
             interval.tick().await;
-            if let Ok(res) = intel
+            match intel
                 .get_plexts(
                     zone.from,
                     zone.to,
@@ -176,49 +176,56 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                 )
                 .await
             {
-                debug!("Got {} plexts", res.result.len());
-                if res.result.is_empty() {
-                    continue;
-                }
-
-                let plexts = res
-                    .result
-                    .iter()
-                    .rev()
-                    .filter_map(|(_id, time, plext)| {
-                        let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
-                        entities::Plext::try_from((msg_type, &plext.plext, *time))
-                            .map_err(|_| {
-                                error!("Unable to create {:?} from {:?}", msg_type, plext.plext)
-                            })
-                            .ok()
-                    })
-                    .collect::<Vec<_>>();
-                let msgs = dedup_flatten::windows_dedup_flatten(plexts.clone(), 8);
-                if res.result.len() != msgs.len() {
-                    info!("Processed {} plexts: {:?}\nInto {} raw messages: {:?}\nInto {} messages: {:?}", res.result.len(), res.result, plexts.len(), plexts, msgs.len(), msgs);
-                }
-
-                for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
-                    if sent_cache[index]
-                        .notify_insert(msg.to_string(), ())
-                        .0
-                        .is_none()
-                    {
-                        for (id, filter) in &zone.users {
-                            if filter.apply(msg) {
-                                senders[id]
-                                    .send(msg.to_string())
-                                    .map_err(|e| error!("Sender error: {}", e))
-                                    .ok();
-                            } else {
-                                debug!("Filtered message for user {}: {:?}", id, msg);
-                            }
-                        }
-                    } else {
-                        debug!("Blocked duplicate entry {:?}", msg);
+                Ok(res) => {
+                    debug!("Got {} plexts", res.result.len());
+                    if res.result.is_empty() {
+                        continue;
                     }
-                }
+
+                    let plexts = res
+                        .result
+                        .iter()
+                        .rev()
+                        .filter_map(|(_id, time, plext)| {
+                            let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
+                            entities::Plext::try_from((msg_type, &plext.plext, *time))
+                                .map_err(|_| {
+                                    error!("Unable to create {:?} from {:?}", msg_type, plext.plext)
+                                })
+                                .ok()
+                        })
+                        .collect::<Vec<_>>();
+                    let msgs = dedup_flatten::windows_dedup_flatten(plexts.clone(), 8);
+                    if res.result.len() != msgs.len() {
+                        info!("Processed {} plexts: {:?}\nInto {} raw messages: {:?}\nInto {} messages: {:?}", res.result.len(), res.result, plexts.len(), plexts, msgs.len(), msgs);
+                    }
+
+                    for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
+                        if sent_cache[index]
+                            .notify_insert(msg.to_string(), ())
+                            .0
+                            .is_none()
+                        {
+                            for (id, filter) in &zone.users {
+                                if filter.apply(msg) {
+                                    senders[id]
+                                        .send(msg.to_string())
+                                        .map_err(|e| error!("Sender error: {}", e))
+                                        .ok();
+                                } else {
+                                    debug!("Filtered message for user {}: {:?}", id, msg);
+                                }
+                            }
+                        } else {
+                            debug!("Blocked duplicate entry {:?}", msg);
+                        }
+                    }
+                },
+                Err(ingress_intel_rs::Error::Deserialize) => {
+                    // try to avoid rate limit
+                    time::sleep(Duration::from_secs(60)).await;
+                },
+                _ => {},
             }
         }
     }
@@ -342,19 +349,26 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
     loop {
         for (portal_id, users) in &portals {
             interval.tick().await;
-            if let Ok(res) = intel.get_portal_details(portal_id).await {
-                let new_cache = PortalCache::from(res.result);
-                if let Some(cached) = cache.get(portal_id) {
-                    if let Some(msg) = cached.alarm(&new_cache) {
-                        for user_id in users {
-                            senders[user_id]
-                                .send(msg.clone())
-                                .map_err(|e| error!("Sender error: {}", e))
-                                .ok();
+            match intel.get_portal_details(portal_id).await {
+                Ok(res) => {
+                    let new_cache = PortalCache::from(res.result);
+                    if let Some(cached) = cache.get(portal_id) {
+                        if let Some(msg) = cached.alarm(&new_cache) {
+                            for user_id in users {
+                                senders[user_id]
+                                    .send(msg.clone())
+                                    .map_err(|e| error!("Sender error: {}", e))
+                                    .ok();
+                            }
                         }
                     }
-                }
-                cache.insert(*portal_id, new_cache);
+                    cache.insert(*portal_id, new_cache);
+                },
+                Err(ingress_intel_rs::Error::Deserialize) => {
+                    // try to avoid rate limit
+                    time::sleep(Duration::from_secs(60)).await;
+                },
+                _ => {},
             }
         }
     }
