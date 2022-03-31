@@ -20,7 +20,7 @@ use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
 
 use tokio::{sync::mpsc, time};
 
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 mod config;
 mod dedup_flatten;
@@ -223,6 +223,7 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                 },
                 Err(ingress_intel_rs::Error::Deserialize) => {
                     // try to avoid rate limit
+                    warn!("Probably rate limited");
                     time::sleep(Duration::from_secs(60)).await;
                 },
                 _ => {},
@@ -366,6 +367,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
                 },
                 Err(ingress_intel_rs::Error::Deserialize) => {
                     // try to avoid rate limit
+                    warn!("Probably rate limited");
                     time::sleep(Duration::from_secs(60)).await;
                 },
                 _ => {},
