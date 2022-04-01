@@ -2,7 +2,7 @@ use std::{collections::HashMap, env, future, time::Duration};
 
 use chrono::Utc;
 
-use futures_util::{future::join_all, stream::unfold, Stream, StreamExt};
+use futures_util::{stream::unfold, Stream, StreamExt};
 
 use ingress_intel_rs::{
     plexts::Tab,
@@ -149,21 +149,16 @@ async fn main() {
     let config = &config;
     let intel = &intel;
     let senders = &senders;
-    join_all((0_u8..2_u8).map(|i| async move {
-        match i {
-            0 => comm_survey(&config, &intel, &senders).await,
-            1 => portal_survey(&config, &intel, &senders).await,
-            _ => panic!("WTF"),
-        }
-    }))
-    .await;
+    tokio::select! {
+        _ = comm_survey(&config, &intel, &senders) => {},
+        _ = portal_survey(&config, &intel, &senders) => {},
+    };
 }
 
 async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
-    let mut interval = time::interval(Duration::from_secs(40));// main comm interval
+    let mut interval = time::interval(Duration::from_secs(30));// main comm interval
     let mut sent_cache: Vec<LruCache<String, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
-    let mut errors = 0;
     loop {
         for (index, zone) in config.zones.iter().enumerate() {
             interval.tick().await;
@@ -178,7 +173,6 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                 .await
             {
                 Ok(res) => {
-                    errors = 0;
                     debug!("Got {} plexts", res.result.len());
                     if res.result.is_empty() {
                         continue;
@@ -224,9 +218,8 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                     }
                 },
                 Err(ingress_intel_rs::Error::Deserialize) => {
-                    errors += 1;
-                    warn!("Probably rate limited, hit {}", errors);
-                    time::sleep(Duration::from_secs(errors * 60)).await;
+                    warn!("Probably rate limited");
+                    return;
                 },
                 _ => {},
             }
@@ -348,14 +341,12 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
         }
     }
     let mut cache: HashMap<&str, PortalCache> = HashMap::with_capacity(portals.len());
-    let mut interval = time::interval(Duration::from_secs(20));// main portal interval
-    let mut errors = 0;
+    let mut interval = time::interval(Duration::from_secs(10));// main portal interval
     loop {
         for (portal_id, users) in &portals {
             interval.tick().await;
             match intel.get_portal_details(portal_id).await {
                 Ok(res) => {
-                    errors = 0;
                     let new_cache = PortalCache::from(res.result);
                     if let Some(cached) = cache.get(portal_id) {
                         if let Some(msg) = cached.alarm(&new_cache) {
@@ -370,9 +361,8 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
                     cache.insert(*portal_id, new_cache);
                 },
                 Err(ingress_intel_rs::Error::Deserialize) => {
-                    errors += 1;
-                    warn!("Probably rate limited, hit {}", errors);
-                    time::sleep(Duration::from_secs(errors * 60)).await;
+                    warn!("Probably rate limited, restart");
+                    return;
                 },
                 _ => {},
             }
