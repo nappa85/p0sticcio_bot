@@ -26,13 +26,21 @@ mod config;
 mod dedup_flatten;
 mod entities;
 
-type Senders = HashMap<u64, mpsc::UnboundedSender<String>>;
+type Senders = HashMap<u64, mpsc::UnboundedSender<Bot>>;
 
 static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
-static BOT_TOKEN: Lazy<String> =
-    Lazy::new(|| env::var("BOT_TOKEN").expect("Missing env var BOT_TOKEN"));
+static BOT_URL1: Lazy<String> =
+    Lazy::new(|| format!(
+        "https://api.telegram.org/bot{}/sendMessage",
+        env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1")
+    ));
+static BOT_URL2: Lazy<String> =
+    Lazy::new(|| format!(
+        "https://api.telegram.org/bot{}/sendMessage",
+        env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2")
+    ));
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -48,14 +56,32 @@ fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item = T> {
     })
 }
 
+#[derive(Debug)]
+enum Bot {
+    Comm(String),
+    Portal(String),
+}
+
+impl Bot {
+    fn get_msg(&self) -> &str {
+        match self {
+            Bot::Comm(s) => s.as_str(),
+            Bot::Portal(s) => s.as_str(),
+        }
+    }
+    fn get_url(&self) -> &str {
+        match self {
+            Bot::Comm(_) => BOT_URL1.as_str(),
+            Bot::Portal(_) => BOT_URL2.as_str(),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     println!("Started version {}", env!("CARGO_PKG_VERSION"));
     tracing_subscriber::fmt::init();
-    let url = format!(
-        "https://api.telegram.org/bot{}/sendMessage",
-        BOT_TOKEN.as_str()
-    );
+
     let config = config::get().await.unwrap();
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
@@ -63,17 +89,16 @@ async fn main() {
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
-        let u = &url;
         make_stream(global_rx)
             .throttle(pool)
-            .for_each_concurrent(None, |(user_id, msg): (u64, String)| async move {
+            .for_each_concurrent(None, |(user_id, msg): (u64, Bot)| async move {
                 for i in 0..10 {
                     let res = CLIENT
-                        .post(u)
+                        .post(msg.get_url())
                         .header("Content-Type", "application/json")
                         .json(&json!({
                             "chat_id": user_id,
-                            "text": msg.as_str(),
+                            "text": msg.get_msg(),
                             "parse_mode": "HTML",
                             "disable_web_page_preview": true
                         }))
@@ -81,7 +106,7 @@ async fn main() {
                         .await
                         .map_err(|e| {
                             error!(
-                                "Telegram error on retry {}: {}\nuser_id: {}\nmessage: {}",
+                                "Telegram error on retry {}: {}\nuser_id: {}\nmessage: {:?}",
                                 i, e, user_id, msg
                             )
                         });
@@ -91,7 +116,7 @@ async fn main() {
                         }
 
                         error!(
-                            "Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {}",
+                            "Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {:?}",
                             i,
                             res.text().await,
                             user_id,
@@ -205,7 +230,7 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                             for (id, filter) in &zone.users {
                                 if filter.apply(msg) {
                                     senders[id]
-                                        .send(msg.to_string())
+                                        .send(Bot::Comm(msg.to_string()))
                                         .map_err(|e| error!("Sender error: {}", e))
                                         .ok();
                                 } else {
@@ -352,7 +377,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
                         if let Some(msg) = cached.alarm(&new_cache) {
                             for user_id in users {
                                 senders[user_id]
-                                    .send(msg.clone())
+                                    .send(Bot::Portal(msg.clone()))
                                     .map_err(|e| error!("Sender error: {}", e))
                                     .ok();
                             }
