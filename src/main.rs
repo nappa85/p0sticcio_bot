@@ -272,16 +272,18 @@ impl From<IntelPortal> for PortalCache {
 
 impl PortalCache {
     fn alarm(&self, other: &Self) -> Option<String> {
+        let mut alarms = Vec::new();
+
         let old = self.get_mods_count();
         let new = other.get_mods_count();
         if old > new {
-            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} mods since last check ({} remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new, new));
+            alarms.push(format!("{} mods since last check ({} remaining)", old - new, new));
         }
 
         let old = self.get_resonators_count();
         let new = other.get_resonators_count();
         if old > new {
-            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {} resonators since last check ({} remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, old - new, new));
+            alarms.push(format!("{} resonators since last check ({} remaining)", old - new, new));
         }
 
         let old = self.get_resonators_energy_sum();
@@ -291,11 +293,16 @@ impl PortalCache {
             let lost_perc = calc_perc(old - new, max);
             // if lost_perc != 15 || !self.all_resonators_lost_the_same(other, lost_perc) {
             let left_perc = calc_perc(new, max);
-            return Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost {}% of resonators energy since last check ({}% remaining)", Self::get_symbol(), self.coords.0, self.coords.1, self.name, lost_perc, left_perc));
+            alarms.push(format!("{}% of resonators energy since last check ({}% remaining)", lost_perc, left_perc));
             // }
         }
 
-        None
+        if alarms.is_empty() {
+            None
+        }
+        else {
+            Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost:<br/>{}", Self::get_symbol(), self.coords.0, self.coords.1, self.name, alarms.join("<br/>")))
+        }
     }
 
     fn get_symbol() -> String {
