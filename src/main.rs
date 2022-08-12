@@ -31,16 +31,18 @@ type Senders = HashMap<u64, mpsc::UnboundedSender<Bot>>;
 static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
-static BOT_URL1: Lazy<String> =
-    Lazy::new(|| format!(
+static BOT_URL1: Lazy<String> = Lazy::new(|| {
+    format!(
         "https://api.telegram.org/bot{}/sendMessage",
         env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1")
-    ));
-static BOT_URL2: Lazy<String> =
-    Lazy::new(|| format!(
+    )
+});
+static BOT_URL2: Lazy<String> = Lazy::new(|| {
+    format!(
         "https://api.telegram.org/bot{}/sendMessage",
         env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2")
-    ));
+    )
+});
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -181,7 +183,7 @@ async fn main() {
 }
 
 async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
-    let mut interval = time::interval(Duration::from_secs(30));// main comm interval
+    let mut interval = time::interval(Duration::from_secs(30)); // main comm interval
     let mut sent_cache: Vec<LruCache<String, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
     loop {
@@ -241,12 +243,12 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                             debug!("Blocked duplicate entry {:?}", msg);
                         }
                     }
-                },
+                }
                 Err(ingress_intel_rs::Error::Deserialize) => {
                     warn!("Probably rate limited");
                     return;
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
@@ -277,13 +279,21 @@ impl PortalCache {
         let old = self.get_mods_count();
         let new = other.get_mods_count();
         if old > new {
-            alarms.push(format!("{} mods since last check ({} remaining)", old - new, new));
+            alarms.push(format!(
+                "{} mods since last check ({} remaining)",
+                old - new,
+                new
+            ));
         }
 
         let old = self.get_resonators_count();
         let new = other.get_resonators_count();
         if old > new {
-            alarms.push(format!("{} resonators since last check ({} remaining)", old - new, new));
+            alarms.push(format!(
+                "{} resonators since last check ({} remaining)",
+                old - new,
+                new
+            ));
         }
 
         let old = self.get_resonators_energy_sum();
@@ -293,15 +303,24 @@ impl PortalCache {
             let lost_perc = calc_perc(old - new, max);
             // if lost_perc != 15 || !self.all_resonators_lost_the_same(other, lost_perc) {
             let left_perc = calc_perc(new, max);
-            alarms.push(format!("{}% of resonators energy since last check ({}% remaining)", lost_perc, left_perc));
+            alarms.push(format!(
+                "{}% of resonators energy since last check ({}% remaining)",
+                lost_perc, left_perc
+            ));
             // }
         }
 
         if alarms.is_empty() {
             None
-        }
-        else {
-            Some(format!("{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost:<br/>{}", Self::get_symbol(), self.coords.0, self.coords.1, self.name, alarms.join("<br/>")))
+        } else {
+            Some(format!(
+                "{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost:\n{}",
+                Self::get_symbol(),
+                self.coords.0,
+                self.coords.1,
+                self.name,
+                alarms.join("\n")
+            ))
         }
     }
 
@@ -373,7 +392,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
         }
     }
     let mut cache: HashMap<&str, PortalCache> = HashMap::with_capacity(portals.len());
-    let mut interval = time::interval(Duration::from_secs(10));// main portal interval
+    let mut interval = time::interval(Duration::from_secs(10)); // main portal interval
     loop {
         for (portal_id, users) in &portals {
             interval.tick().await;
@@ -391,12 +410,12 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
                         }
                     }
                     cache.insert(*portal_id, new_cache);
-                },
+                }
                 Err(ingress_intel_rs::Error::Deserialize) => {
                     warn!("Probably rate limited, restart");
                     return;
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
