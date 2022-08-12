@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 
 use tracing::error;
 
-use crate::dedup_flatten::DedupFlatten;
+use crate::{dedup_flatten::DedupFlatten, symbols};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PlextType {
@@ -288,20 +288,16 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
 impl<'a> std::fmt::Display for Plext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Plext::Captured { player, portal, .. } => write!(
-                f,
-                "{} {}captured {}",
-                player,
-                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9B, 0xB3]) },
-                portal
-            ), //flag
+            Plext::Captured { player, portal, .. } => {
+                write!(f, "{} {}captured {}", player, symbols::GOLF, portal)
+            } //flag
             Plext::CreatedCF {
                 player, portal, mu, ..
             } => write!(
                 f,
                 "{} {}created a Control Field {} +{}MU",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9B, 0x9B]) },
+                symbols::TRIANGLE,
                 portal,
                 mu
             ), //triangle
@@ -311,7 +307,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}destroyed a Control Field {} -{}MU",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0xAD, 0x99]) },
+                symbols::CROSS,
                 portal,
                 mu
             ), //cross
@@ -319,14 +315,14 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}deployed a Resonator on {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0xA7, 0xB1]) },
+                symbols::BRICK,
                 portal
             ), //bricks
             Plext::DestroyedReso { player, portal, .. } => write!(
                 f,
                 "{} {}destroyed a Resonator on {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x92, 0xA5]) },
+                symbols::EXPLOSION,
                 portal
             ), //explosion
             Plext::DestroyedLink {
@@ -338,7 +334,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}destroyed the Link {} to {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9C, 0x82]) },
+                symbols::SCISSORS,
                 source,
                 target
             ), //scissors
@@ -351,35 +347,32 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}linked {} to {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x94, 0x97]) },
+                symbols::CHAIN,
                 source,
                 target
             ), //chain
-            Plext::DroneReturn { player, .. } => write!(
-                f,
-                "{}Drone returned to Agent by {}",
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9B, 0xB8]) },
-                player
-            ), //ufo
+            Plext::DroneReturn { player, .. } => {
+                write!(f, "{}Drone returned to Agent by {}", symbols::UFO, player)
+            } //ufo
             Plext::DeployedBeacon { player, portal, .. } => write!(
                 f,
                 "{} {}deployed a Beacon on {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9A, 0xA8]) },
+                symbols::ALARM,
                 portal
             ), //police
             Plext::DeployedFireworks { player, portal, .. } => write!(
                 f,
                 "{} {}deployed Fireworks on {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x8E, 0x86]) },
+                symbols::FIREWORKS,
                 portal
             ), //fireworks
             Plext::MaybeVirus { player, portal, .. } => write!(
                 f,
                 "{} {}probably used a Virus on {}",
                 player,
-                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0xA6, 0xA0]) },
+                symbols::VIRUS,
                 portal
             ), //virus
             Plext::Unknown { text, .. } => write!(f, "{}", text),
@@ -446,12 +439,8 @@ impl<'a> TryFrom<Option<&'a str>> for Team {
 impl std::fmt::Display for Team {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Team::Enlightened => write!(f, "{}", unsafe {
-                std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9F, 0xA2])
-            }), // green circle
-            Team::Resistance => write!(f, "{}", unsafe {
-                std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x94, 0xB5])
-            }), // blue circle
+            Team::Enlightened => write!(f, "{}", symbols::GREEN),
+            Team::Resistance => write!(f, "{}", symbols::BLUE),
         }
     }
 }

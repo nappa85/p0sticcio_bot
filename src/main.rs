@@ -25,6 +25,7 @@ use tracing::{debug, error, info, warn};
 mod config;
 mod dedup_flatten;
 mod entities;
+mod symbols;
 
 type Senders = HashMap<u64, mpsc::UnboundedSender<Bot>>;
 
@@ -314,17 +315,13 @@ impl PortalCache {
         } else {
             Some(format!(
                 "{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost:\n{}",
-                Self::get_symbol(),
+                symbols::ALERT,
                 self.coords.0,
                 self.coords.1,
                 self.name,
                 alarms.join("\n")
             ))
         }
-    }
-
-    fn get_symbol() -> &'static str {
-        unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9A, 0xA0]) }
     }
 
     fn get_mods_count(&self) -> usize {
