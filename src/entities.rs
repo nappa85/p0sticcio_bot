@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::dedup_flatten::DedupFlatten;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PlextType {
     Captured,
     CreatedCF,
@@ -42,7 +42,7 @@ impl<'a> From<&'a [Markup]> for PlextType {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Plext<'a> {
     /// [["PLAYER",{"plain":"bicilindrico","team":"RESISTANCE"}],["TEXT",{"plain":" captured "}],["PORTAL",{"plain":"Oratorio Di Villa Minelli (Via Roma, 136, 31050 Ponzano TV, Italy)","name":"Oratorio Di Villa Minelli","address":"Via Roma, 136, 31050 Ponzano TV, Italy","latE6":45708709,"lngE6":12217027,"team":"RESISTANCE"}]]
     Captured {
@@ -292,7 +292,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}captured {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9B, 0xB3]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9B, 0xB3]) },
                 portal
             ), //flag
             Plext::CreatedCF {
@@ -301,7 +301,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}created a Control Field {} +{}MU",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9B, 0x9B]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9B, 0x9B]) },
                 portal,
                 mu
             ), //triangle
@@ -311,7 +311,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}destroyed a Control Field {} -{}MU",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xE2, 0xAD, 0x99]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0xAD, 0x99]) },
                 portal,
                 mu
             ), //cross
@@ -319,14 +319,14 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}deployed a Resonator on {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA7, 0xB1]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0xA7, 0xB1]) },
                 portal
             ), //bricks
             Plext::DestroyedReso { player, portal, .. } => write!(
                 f,
                 "{} {}destroyed a Resonator on {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x92, 0xA5]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x92, 0xA5]) },
                 portal
             ), //explosion
             Plext::DestroyedLink {
@@ -338,7 +338,7 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}destroyed the Link {} to {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9C, 0x82]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9C, 0x82]) },
                 source,
                 target
             ), //scissors
@@ -351,35 +351,35 @@ impl<'a> std::fmt::Display for Plext<'a> {
                 f,
                 "{} {}linked {} to {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x94, 0x97]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x94, 0x97]) },
                 source,
                 target
             ), //chain
             Plext::DroneReturn { player, .. } => write!(
                 f,
                 "{}Drone returned to Agent by {}",
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9B, 0xB8]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9B, 0xB8]) },
                 player
             ), //ufo
             Plext::DeployedBeacon { player, portal, .. } => write!(
                 f,
                 "{} {}deployed a Beacon on {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9A, 0xA8]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9A, 0xA8]) },
                 portal
             ), //police
             Plext::DeployedFireworks { player, portal, .. } => write!(
                 f,
                 "{} {}deployed Fireworks on {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x8E, 0x86]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x8E, 0x86]) },
                 portal
             ), //fireworks
             Plext::MaybeVirus { player, portal, .. } => write!(
                 f,
                 "{} {}probably used a Virus on {}",
                 player,
-                unsafe { String::from_utf8_unchecked(vec![0xF0, 0x9F, 0xA6, 0xA0]) },
+                unsafe { std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0xA6, 0xA0]) },
                 portal
             ), //virus
             Plext::Unknown { text, .. } => write!(f, "{}", text),
@@ -423,7 +423,7 @@ impl<'a> DedupFlatten for Plext<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Team {
     Enlightened,
     Resistance,
@@ -447,16 +447,16 @@ impl std::fmt::Display for Team {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Team::Enlightened => write!(f, "{}", unsafe {
-                String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x9F, 0xA2])
+                std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x9F, 0xA2])
             }), // green circle
             Team::Resistance => write!(f, "{}", unsafe {
-                String::from_utf8_unchecked(vec![0xF0, 0x9F, 0x94, 0xB5])
+                std::str::from_utf8_unchecked(&[0xF0, 0x9F, 0x94, 0xB5])
             }), // blue circle
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Player<'a> {
     team: Team,
     name: &'a str,
@@ -489,7 +489,7 @@ impl<'a> std::fmt::Display for Player<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Portal<'a> {
     name: &'a str,
     address: &'a str,

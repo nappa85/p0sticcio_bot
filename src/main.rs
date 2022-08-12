@@ -134,7 +134,7 @@ async fn main() {
     let senders = config
         .zones
         .iter()
-        .map(|z| {
+        .flat_map(|z| {
             z.users.iter().map(|(id, _)| {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let global_tx = global_tx.clone();
@@ -157,7 +157,6 @@ async fn main() {
                 (id, tx)
             })
         })
-        .flatten()
         .collect::<HashMap<_, _>>();
 
     let intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
@@ -177,8 +176,8 @@ async fn main() {
     let intel = &intel;
     let senders = &senders;
     tokio::select! {
-        _ = comm_survey(&config, &intel, &senders) => {},
-        _ = portal_survey(&config, &intel, &senders) => {},
+        _ = comm_survey(config, intel, senders) => {},
+        _ = portal_survey(config, intel, senders) => {},
     };
 }
 
@@ -324,8 +323,8 @@ impl PortalCache {
         }
     }
 
-    fn get_symbol() -> String {
-        unsafe { String::from_utf8_unchecked(vec![0xE2, 0x9A, 0xA0]) }
+    fn get_symbol() -> &'static str {
+        unsafe { std::str::from_utf8_unchecked(&[0xE2, 0x9A, 0xA0]) }
     }
 
     fn get_mods_count(&self) -> usize {

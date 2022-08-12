@@ -6,6 +6,8 @@ pub fn windows_dedup_flatten<T>(mut items: Vec<T>, size: usize) -> Vec<T>
 where
     T: DedupFlatten + std::fmt::Debug,
 {
+    // the collect here is necessary to truncate items reference
+    #[allow(clippy::needless_collect)]
     let windows = items
         .windows(size)
         .enumerate()
