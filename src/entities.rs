@@ -474,7 +474,7 @@ impl<'a> TryFrom<&'a Markup> for Player<'a> {
 
 impl<'a> std::fmt::Display for Player<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}{}", self.team, self.name)
+        write!(f, "{} <a href=\"https://link.ingress.com/?link=https%3A%2F%2Fintel.ingress.com%2Fagent%2F{name}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3A%2F%2Fapps.apple.com%2Fapp%2Fingress%2Fid576505181&ofl=https%3A%2F%2Fwww.ingress.com%2F\">{name}</a>", self.team, name=self.name)
     }
 }
 
