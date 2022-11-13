@@ -1,4 +1,4 @@
-use ingress_intel_rs::plexts::Markup;
+use ingress_intel_rs::{entities::Faction, plexts::Markup};
 
 use rust_decimal::Decimal;
 
@@ -120,9 +120,7 @@ pub enum Plext<'a> {
 
 impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plext<'a> {
     type Error = ();
-    fn try_from(
-        (pt, plext, time): (PlextType, &'a ingress_intel_rs::plexts::Plext, i64),
-    ) -> Result<Self, Self::Error> {
+    fn try_from((pt, plext, time): (PlextType, &'a ingress_intel_rs::plexts::Plext, i64)) -> Result<Self, Self::Error> {
         Ok(match pt {
             PlextType::Captured => Plext::Captured {
                 player: plext
@@ -152,11 +150,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                     .markup
                     .get(4)
                     .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
-                    .and_then(|(_, m)| {
-                        m.plain
-                            .parse()
-                            .map_err(|e| error!("Invalid MU value: {}", e))
-                    })?,
+                    .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
                 time,
             },
             PlextType::DestroyedCF => Plext::DestroyedCF {
@@ -174,11 +168,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                     .markup
                     .get(4)
                     .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
-                    .and_then(|(_, m)| {
-                        m.plain
-                            .parse()
-                            .map_err(|e| error!("Invalid MU value: {}", e))
-                    })?,
+                    .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
                 time,
             },
             PlextType::DeployedReso => Plext::DeployedReso {
@@ -277,10 +267,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                     .and_then(TryInto::try_into)?,
                 time,
             },
-            PlextType::Unknown => Plext::Unknown {
-                text: plext.text.as_str(),
-                time,
-            },
+            PlextType::Unknown => Plext::Unknown { text: plext.text.as_str(), time },
         })
     }
 }
@@ -291,90 +278,36 @@ impl<'a> std::fmt::Display for Plext<'a> {
             Plext::Captured { player, portal, .. } => {
                 write!(f, "{} {}captured {}", player, symbols::GOLF, portal)
             } //flag
-            Plext::CreatedCF {
-                player, portal, mu, ..
-            } => write!(
-                f,
-                "{} {}created a Control Field {} +{}MU",
-                player,
-                symbols::TRIANGLE,
-                portal,
-                mu
-            ), //triangle
-            Plext::DestroyedCF {
-                player, portal, mu, ..
-            } => write!(
-                f,
-                "{} {}destroyed a Control Field {} -{}MU",
-                player,
-                symbols::CROSS,
-                portal,
-                mu
-            ), //cross
-            Plext::DeployedReso { player, portal, .. } => write!(
-                f,
-                "{} {}deployed a Resonator on {}",
-                player,
-                symbols::BRICK,
-                portal
-            ), //bricks
-            Plext::DestroyedReso { player, portal, .. } => write!(
-                f,
-                "{} {}destroyed a Resonator on {}",
-                player,
-                symbols::EXPLOSION,
-                portal
-            ), //explosion
-            Plext::DestroyedLink {
-                player,
-                source,
-                target,
-                ..
-            } => write!(
-                f,
-                "{} {}destroyed the Link {} to {}",
-                player,
-                symbols::SCISSORS,
-                source,
-                target
-            ), //scissors
-            Plext::Linked {
-                player,
-                source,
-                target,
-                ..
-            } => write!(
-                f,
-                "{} {}linked {} to {}",
-                player,
-                symbols::CHAIN,
-                source,
-                target
-            ), //chain
+            Plext::CreatedCF { player, portal, mu, .. } => {
+                write!(f, "{} {}created a Control Field {} +{}MU", player, symbols::TRIANGLE, portal, mu)
+            } //triangle
+            Plext::DestroyedCF { player, portal, mu, .. } => {
+                write!(f, "{} {}destroyed a Control Field {} -{}MU", player, symbols::CROSS, portal, mu)
+            } //cross
+            Plext::DeployedReso { player, portal, .. } => {
+                write!(f, "{} {}deployed a Resonator on {}", player, symbols::BRICK, portal)
+            } //bricks
+            Plext::DestroyedReso { player, portal, .. } => {
+                write!(f, "{} {}destroyed a Resonator on {}", player, symbols::EXPLOSION, portal)
+            } //explosion
+            Plext::DestroyedLink { player, source, target, .. } => {
+                write!(f, "{} {}destroyed the Link {} to {}", player, symbols::SCISSORS, source, target)
+            } //scissors
+            Plext::Linked { player, source, target, .. } => {
+                write!(f, "{} {}linked {} to {}", player, symbols::CHAIN, source, target)
+            } //chain
             Plext::DroneReturn { player, .. } => {
                 write!(f, "{}Drone returned to Agent by {}", symbols::UFO, player)
             } //ufo
-            Plext::DeployedBeacon { player, portal, .. } => write!(
-                f,
-                "{} {}deployed a Beacon on {}",
-                player,
-                symbols::ALARM,
-                portal
-            ), //police
-            Plext::DeployedFireworks { player, portal, .. } => write!(
-                f,
-                "{} {}deployed Fireworks on {}",
-                player,
-                symbols::FIREWORKS,
-                portal
-            ), //fireworks
-            Plext::MaybeVirus { player, portal, .. } => write!(
-                f,
-                "{} {}probably used a Virus on {}",
-                player,
-                symbols::VIRUS,
-                portal
-            ), //virus
+            Plext::DeployedBeacon { player, portal, .. } => {
+                write!(f, "{} {}deployed a Beacon on {}", player, symbols::ALARM, portal)
+            } //police
+            Plext::DeployedFireworks { player, portal, .. } => {
+                write!(f, "{} {}deployed Fireworks on {}", player, symbols::FIREWORKS, portal)
+            } //fireworks
+            Plext::MaybeVirus { player, portal, .. } => {
+                write!(f, "{} {}probably used a Virus on {}", player, symbols::VIRUS, portal)
+            } //virus
             Plext::Unknown { text, .. } => write!(f, "{}", text),
         }
     }
@@ -383,17 +316,9 @@ impl<'a> std::fmt::Display for Plext<'a> {
 impl<'a> Plext<'a> {
     pub fn has_duplicates(&self, others: &[Plext<'a>]) -> bool {
         match self {
-            Plext::DeployedReso {
-                player,
-                portal,
-                time,
-            } => others.iter().any(|m| {
-                m == &Plext::Captured {
-                    player: *player,
-                    portal: *portal,
-                    time: *time,
-                }
-            }),
+            Plext::DeployedReso { player, portal, time } => {
+                others.iter().any(|m| m == &Plext::Captured { player: *player, portal: *portal, time: *time })
+            }
             _ => false,
         }
     }
@@ -401,17 +326,8 @@ impl<'a> Plext<'a> {
 
 impl<'a> DedupFlatten for Plext<'a> {
     fn dedup_flatten(&mut self) {
-        if let Plext::DestroyedReso {
-            player,
-            portal,
-            time,
-        } = *self
-        {
-            *self = Plext::MaybeVirus {
-                player,
-                portal,
-                time,
-            };
+        if let Plext::DestroyedReso { player, portal, time } = *self {
+            *self = Plext::MaybeVirus { player, portal, time };
         }
     }
 }
@@ -420,6 +336,15 @@ impl<'a> DedupFlatten for Plext<'a> {
 pub enum Team {
     Enlightened,
     Resistance,
+}
+
+impl From<Faction> for Team {
+    fn from(f: Faction) -> Self {
+        match f {
+            Faction::Enlightened => Team::Enlightened,
+            Faction::Resistance => Team::Resistance,
+        }
+    }
 }
 
 impl<'a> TryFrom<Option<&'a str>> for Team {
@@ -461,10 +386,7 @@ impl<'a> TryFrom<&'a Markup> for Player<'a> {
     type Error = ();
     fn try_from((mt, me): &'a Markup) -> Result<Self, Self::Error> {
         if mt == "PLAYER" {
-            Ok(Player {
-                team: me.team.as_deref().try_into()?,
-                name: me.plain.as_str(),
-            })
+            Ok(Player { team: me.team.as_deref().try_into()?, name: me.plain.as_str() })
         } else {
             error!("Expected a PLAYER element, got {}", mt);
             Err(())
@@ -480,10 +402,10 @@ impl<'a> std::fmt::Display for Player<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Portal<'a> {
-    name: &'a str,
-    address: &'a str,
-    lat: Decimal,
-    lon: Decimal,
+    pub name: &'a str,
+    pub address: &'a str,
+    pub lat: Decimal,
+    pub lon: Decimal,
 }
 
 // impl<'a> Portal<'a> {
@@ -504,18 +426,9 @@ impl<'a> TryFrom<&'a Markup> for Portal<'a> {
         if mt == "PORTAL" {
             Ok(Portal {
                 name: me.name.as_deref().ok_or_else(|| error!("Missing name"))?,
-                address: me
-                    .address
-                    .as_deref()
-                    .ok_or_else(|| error!("Missing address"))?,
-                lat: me
-                    .lat_e6
-                    .map(|i| Decimal::new(i, 6))
-                    .ok_or_else(|| error!("Missing latE6"))?,
-                lon: me
-                    .lng_e6
-                    .map(|i| Decimal::new(i, 6))
-                    .ok_or_else(|| error!("Missing lngE6"))?,
+                address: me.address.as_deref().ok_or_else(|| error!("Missing address"))?,
+                lat: me.lat_e6.map(|i| Decimal::new(i, 6)).ok_or_else(|| error!("Missing latE6"))?,
+                lon: me.lng_e6.map(|i| Decimal::new(i, 6)).ok_or_else(|| error!("Missing lngE6"))?,
             })
         } else {
             error!("Expected a PORTAL element, got {}", mt);

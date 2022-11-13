@@ -11,13 +11,7 @@ where
     let windows = items
         .windows(size)
         .enumerate()
-        .filter_map(|(index, e)| {
-            if e.windows(2).any(|e| e[0] != e[1]) {
-                None
-            } else {
-                Some(index)
-            }
-        })
+        .filter_map(|(index, e)| if e.windows(2).any(|e| e[0] != e[1]) { None } else { Some(index) })
         .collect::<Vec<_>>();
 
     for window in windows.into_iter().rev() {
@@ -50,73 +44,25 @@ mod tests {
 
     #[test]
     fn test2() {
-        let list = vec![
-            Foo(1),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-        ];
+        let list = vec![Foo(1), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0)];
         assert_eq!(super::windows_dedup_flatten(list, 8), &[Foo(1), Foo(1)]);
     }
 
     #[test]
     fn test3() {
-        let list = vec![
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(1),
-        ];
+        let list = vec![Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(1)];
         assert_eq!(super::windows_dedup_flatten(list, 8), &[Foo(1), Foo(1)]);
     }
 
     #[test]
     fn test4() {
-        let list = vec![
-            Foo(1),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-        ];
-        assert_eq!(
-            super::windows_dedup_flatten(list, 8),
-            &[Foo(1), Foo(0), Foo(1)]
-        );
+        let list = vec![Foo(1), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0)];
+        assert_eq!(super::windows_dedup_flatten(list, 8), &[Foo(1), Foo(0), Foo(1)]);
     }
 
     #[test]
     fn test5() {
-        let list = vec![
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(0),
-            Foo(1),
-        ];
-        assert_eq!(
-            super::windows_dedup_flatten(list, 8),
-            &[Foo(0), Foo(1), Foo(1)]
-        );
+        let list = vec![Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(0), Foo(1)];
+        assert_eq!(super::windows_dedup_flatten(list, 8), &[Foo(0), Foo(1), Foo(1)]);
     }
 }

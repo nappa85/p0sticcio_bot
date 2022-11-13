@@ -14,6 +14,7 @@ use lru_time_cache::LruCache;
 
 use once_cell::sync::Lazy;
 
+use rust_decimal::{prelude::FromPrimitive, Decimal};
 use serde_json::json;
 
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
@@ -33,16 +34,10 @@ static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
 static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
 static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
 static BOT_URL1: Lazy<String> = Lazy::new(|| {
-    format!(
-        "https://api.telegram.org/bot{}/sendMessage",
-        env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1")
-    )
+    format!("https://api.telegram.org/bot{}/sendMessage", env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1"))
 });
 static BOT_URL2: Lazy<String> = Lazy::new(|| {
-    format!(
-        "https://api.telegram.org/bot{}/sendMessage",
-        env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2")
-    )
+    format!("https://api.telegram.org/bot{}/sendMessage", env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2"))
 });
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
@@ -108,10 +103,7 @@ async fn main() {
                         .send()
                         .await
                         .map_err(|e| {
-                            error!(
-                                "Telegram error on retry {}: {}\nuser_id: {}\nmessage: {:?}",
-                                i, e, user_id, msg
-                            )
+                            error!("Telegram error on retry {}: {}\nuser_id: {}\nmessage: {:?}", i, e, user_id, msg)
                         });
                     if let Ok(res) = res {
                         if res.status().is_success() {
@@ -147,10 +139,7 @@ async fn main() {
                     make_stream(rx)
                         .throttle(pool)
                         .for_each(|msg| {
-                            global_tx
-                                .send((id, msg))
-                                .map_err(|e| error!("Sender error: {}", e))
-                                .ok();
+                            global_tx.send((id, msg)).map_err(|e| error!("Sender error: {}", e)).ok();
                             future::ready(())
                         })
                         .await;
@@ -179,6 +168,7 @@ async fn main() {
     tokio::select! {
         _ = comm_survey(config, intel, senders) => {},
         _ = portal_survey(config, intel, senders) => {},
+        _ = map_survey(config, intel, senders) => {},
     };
 }
 
@@ -212,23 +202,25 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                         .filter_map(|(_id, time, plext)| {
                             let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
                             entities::Plext::try_from((msg_type, &plext.plext, *time))
-                                .map_err(|_| {
-                                    error!("Unable to create {:?} from {:?}", msg_type, plext.plext)
-                                })
+                                .map_err(|_| error!("Unable to create {:?} from {:?}", msg_type, plext.plext))
                                 .ok()
                         })
                         .collect::<Vec<_>>();
                     let msgs = dedup_flatten::windows_dedup_flatten(plexts.clone(), 8);
                     if res.result.len() != msgs.len() {
-                        info!("Processed {} plexts: {:?}\nInto {} raw messages: {:?}\nInto {} messages: {:?}", res.result.len(), res.result, plexts.len(), plexts, msgs.len(), msgs);
+                        info!(
+                            "Processed {} plexts: {:?}\nInto {} raw messages: {:?}\nInto {} messages: {:?}",
+                            res.result.len(),
+                            res.result,
+                            plexts.len(),
+                            plexts,
+                            msgs.len(),
+                            msgs
+                        );
                     }
 
                     for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
-                        if sent_cache[index]
-                            .notify_insert(msg.to_string(), ())
-                            .0
-                            .is_none()
-                        {
+                        if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
                             for (id, filter) in &zone.users {
                                 if filter.apply(msg) {
                                     senders[id]
@@ -279,21 +271,13 @@ impl PortalCache {
         let old = self.get_mods_count();
         let new = other.get_mods_count();
         if old > new {
-            alarms.push(format!(
-                "{} mods since last check ({} remaining)",
-                old - new,
-                new
-            ));
+            alarms.push(format!("{} mods since last check ({} remaining)", old - new, new));
         }
 
         let old = self.get_resonators_count();
         let new = other.get_resonators_count();
         if old > new {
-            alarms.push(format!(
-                "{} resonators since last check ({} remaining)",
-                old - new,
-                new
-            ));
+            alarms.push(format!("{} resonators since last check ({} remaining)", old - new, new));
         }
 
         let old = self.get_resonators_energy_sum();
@@ -303,10 +287,7 @@ impl PortalCache {
             let lost_perc = calc_perc(old - new, max);
             // if lost_perc != 15 || !self.all_resonators_lost_the_same(other, lost_perc) {
             let left_perc = calc_perc(new, max);
-            alarms.push(format!(
-                "{}% of resonators energy since last check ({}% remaining)",
-                lost_perc, left_perc
-            ));
+            alarms.push(format!("{}% of resonators energy since last check ({}% remaining)", lost_perc, left_perc));
             // }
         }
 
@@ -333,20 +314,11 @@ impl PortalCache {
     }
 
     fn get_resonators_energy_sum(&self) -> u16 {
-        self.resonators
-            .iter()
-            .filter_map(|r| r.as_ref().map(|r| r.get_energy()))
-            .sum()
+        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy())).sum()
     }
 
     fn get_resonators_max_energy_sum(&self) -> u16 {
-        self.resonators
-            .iter()
-            .filter_map(|r| {
-                r.as_ref()
-                    .map(|r| get_portal_max_energy_by_level(r.get_level()))
-            })
-            .sum()
+        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| get_portal_max_energy_by_level(r.get_level()))).sum()
     }
 
     // fn all_resonators_lost_the_same(&self, other: &Self, perc: u8) -> bool {
@@ -377,7 +349,7 @@ fn get_portal_max_energy_by_level(level: u8) -> u16 {
 
 async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
     let mut portals = HashMap::new();
-    for (_, zone) in config.zones.iter().enumerate() {
+    for zone in config.zones.iter() {
         for (id, filter) in &zone.users {
             if let Some(ps) = &filter.portals {
                 for p in ps {
@@ -417,6 +389,69 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
     }
 }
 
+async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
+    loop {
+        let now = Utc::now().naive_utc();
+        let next_midnight = now.date().and_hms_opt(0, 0, 0).unwrap() + chrono::Duration::days(1);
+        time::sleep((next_midnight - now).to_std().unwrap()).await;
+        for zone in config.zones.iter() {
+            let from_lat = zone.from[0] as f64 / 1000000_f64;
+            let from_lng = zone.from[1] as f64 / 1000000_f64;
+            let to_lat = zone.to[0] as f64 / 1000000_f64;
+            let to_lng = zone.to[1] as f64 / 1000000_f64;
+            if let Ok(entities) =
+                intel.get_entities_in_range((from_lat, from_lng), (to_lat, to_lng), Some(15), Some(7), None, None).await
+            {
+                let mut list = HashMap::new();
+                for portal in entities.into_iter().flat_map(|e| e.entities) {
+                    if !portal.is_portal() {
+                        continue;
+                    }
+
+                    if let (Some(name), Some(level), Some(faction), Some(lat), Some(lon)) = (
+                        portal.get_name(),
+                        portal.get_level(),
+                        portal.get_faction(),
+                        portal.get_latitude().and_then(Decimal::from_f64),
+                        portal.get_longitude().and_then(Decimal::from_f64),
+                    ) {
+                        if level < 7 {
+                            continue;
+                        }
+                        let sublist = list.entry((level, faction)).or_insert_with(Vec::new);
+                        sublist.push(entities::Portal { name, address: "maps", lat, lon }.to_string());
+                    }
+                }
+                if !list.is_empty() {
+                    for ((level, faction), sublist) in list {
+                        // split messages to respect 4094 bytes message limit
+                        let init = format!("{} L{level} portal:", entities::Team::from(faction));
+                        let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, msg| {
+                            let mut slot = msgs.len() - 1;
+                            if msgs[slot].len() + msg.len() + 3 > 4094 {
+                                msgs.push(init.clone());
+                                slot += 1;
+                            }
+                            msgs[slot].push_str("\n* ");
+                            msgs[slot].push_str(&msg);
+                            msgs
+                        });
+                        // send messages
+                        for id in zone.users.keys() {
+                            for msg in &msgs {
+                                senders[id]
+                                    .send(Bot::Portal(msg.clone()))
+                                    .map_err(|e| error!("Sender error: {}", e))
+                                    .ok();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tracing::{debug, info};
@@ -447,10 +482,7 @@ mod tests {
                         if filter.apply(msg) {
                             info!("Sent message to user {} in zone {}: {:?}", id, index, msg);
                         } else {
-                            debug!(
-                                "Filtered message for user {} in zone {}: {:?}",
-                                id, index, msg
-                            );
+                            debug!("Filtered message for user {} in zone {}: {:?}", id, index, msg);
                         }
                     }
                 }

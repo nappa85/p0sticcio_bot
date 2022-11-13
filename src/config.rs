@@ -173,13 +173,9 @@ impl Filter {
 
 /// reads config file
 pub async fn get() -> Result<Config, ()> {
-    let mut file = File::open("config.yaml")
-        .await
-        .map_err(|e| eprintln!("Error opening file config.yaml: {}", e))?;
+    let mut file = File::open("config.yaml").await.map_err(|e| eprintln!("Error opening file config.yaml: {}", e))?;
     let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .await
-        .map_err(|e| eprintln!("Error reading file config.yaml: {}", e))?;
+    file.read_to_string(&mut contents).await.map_err(|e| eprintln!("Error reading file config.yaml: {}", e))?;
     serde_yaml::from_str(&contents).map_err(|e| eprintln!("Error decoding file config.yaml: {}", e))
 }
 
