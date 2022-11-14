@@ -399,8 +399,17 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
             let from_lng = zone.from[1] as f64 / 1000000_f64;
             let to_lat = zone.to[0] as f64 / 1000000_f64;
             let to_lng = zone.to[1] as f64 / 1000000_f64;
-            if let Ok(entities) =
-                intel.get_entities_in_range((from_lat, from_lng), (to_lat, to_lng), Some(15), Some(7), None, None).await
+            if let Ok(entities) = intel
+                .get_entities_in_range(
+                    (from_lat, from_lng),
+                    (to_lat, to_lng),
+                    Some(15),
+                    Some(7),
+                    None,
+                    None,
+                    (1, Duration::from_secs(2)),
+                )
+                .await
             {
                 let mut list = HashMap::new();
                 for portal in entities.into_iter().flat_map(|e| e.entities) {
