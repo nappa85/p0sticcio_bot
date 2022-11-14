@@ -1,4 +1,9 @@
-use std::{collections::HashMap, env, future, time::Duration};
+use std::{
+    collections::HashMap,
+    env, future,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use chrono::Utc;
 
@@ -15,6 +20,7 @@ use lru_time_cache::LruCache;
 use once_cell::sync::Lazy;
 
 use rust_decimal::{prelude::FromPrimitive, Decimal};
+
 use serde_json::json;
 
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
@@ -46,6 +52,7 @@ static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .build()
         .unwrap()
 });
+static SCANNING: AtomicBool = AtomicBool::new(false);
 
 fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item = T> {
     unfold(rx, |mut rx| async {
@@ -237,8 +244,10 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                     }
                 }
                 Err(ingress_intel_rs::Error::Deserialize) => {
-                    warn!("Probably rate limited");
-                    return;
+                    if !SCANNING.load(Ordering::Relaxed) {
+                        warn!("Probably rate limited, restart");
+                        return;
+                    }
                 }
                 _ => {}
             }
@@ -380,8 +389,10 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
                     cache.insert(*portal_id, new_cache);
                 }
                 Err(ingress_intel_rs::Error::Deserialize) => {
-                    warn!("Probably rate limited, restart");
-                    return;
+                    if !SCANNING.load(Ordering::Relaxed) {
+                        warn!("Probably rate limited, restart");
+                        return;
+                    }
                 }
                 _ => {}
             }
@@ -394,6 +405,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
         let now = Utc::now().naive_utc();
         let next_trigger = now.date().and_hms_opt(0, 0, 0).unwrap() + chrono::Duration::days(1);
         time::sleep((next_trigger - now).to_std().unwrap()).await;
+        SCANNING.store(true, Ordering::Relaxed);
         for zone in config.zones.iter() {
             let from_lat = zone.from[0] as f64 / 1000000_f64;
             let from_lng = zone.from[1] as f64 / 1000000_f64;
@@ -407,7 +419,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                     Some(7),
                     None,
                     None,
-                    (1, Duration::from_secs(2)),
+                    (1, Duration::from_secs(1)),
                 )
                 .await
             {
@@ -458,6 +470,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                 }
             }
         }
+        SCANNING.store(false, Ordering::Relaxed);
     }
 }
 
