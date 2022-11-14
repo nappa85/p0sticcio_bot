@@ -392,10 +392,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
 async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
     loop {
         let now = Utc::now().naive_utc();
-        let mut next_trigger = now.date().and_hms_opt(12, 0, 0).unwrap();
-        if now > next_trigger {
-            next_trigger += chrono::Duration::days(1);
-        }
+        let next_trigger = now.date().and_hms_opt(0, 0, 0).unwrap() + chrono::Duration::days(1);
         time::sleep((next_trigger - now).to_std().unwrap()).await;
         for zone in config.zones.iter() {
             let from_lat = zone.from[0] as f64 / 1000000_f64;
