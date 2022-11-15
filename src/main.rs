@@ -424,7 +424,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                 .await
             {
                 let mut list = HashMap::new();
-                for portal in entities.into_iter().flat_map(|e| e.entities) {
+                for portal in entities.iter().flat_map(|e| &e.entities) {
                     if !portal.is_portal() {
                         continue;
                     }
@@ -440,14 +440,17 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                             continue;
                         }
                         let sublist = list.entry((level, faction)).or_insert_with(Vec::new);
-                        sublist.push(entities::Portal { name, address: "maps", lat, lon }.to_string());
+                        sublist.push(entities::Portal { name, address: "maps", lat, lon });
                     }
                 }
                 if !list.is_empty() {
-                    for ((level, faction), sublist) in list {
+                    for ((level, faction), mut sublist) in list {
+                        sublist.sort_unstable_by(|p1, p2| p1.name.cmp(p2.name));
+
                         // split messages to respect 4094 bytes message limit
                         let init = format!("{} L{level} portal:", entities::Team::from(faction));
-                        let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, msg| {
+                        let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
+                            let msg = portal.to_string();
                             let mut slot = msgs.len() - 1;
                             if msgs[slot].len() + msg.len() + 3 > 4094 {
                                 msgs.push(init.clone());
@@ -457,6 +460,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                             msgs[slot].push_str(&msg);
                             msgs
                         });
+
                         // send messages
                         for id in zone.users.keys() {
                             for msg in &msgs {
