@@ -462,12 +462,14 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                         });
 
                         // send messages
-                        for id in zone.users.keys() {
-                            for msg in &msgs {
-                                senders[id]
-                                    .send(Bot::Portal(msg.clone()))
-                                    .map_err(|e| error!("Sender error: {}", e))
-                                    .ok();
+                        for (id, conf) in &zone.users {
+                            if conf.resume.unwrap_or_default() {
+                                for msg in &msgs {
+                                    senders[id]
+                                        .send(Bot::Portal(msg.clone()))
+                                        .map_err(|e| error!("Sender error: {}", e))
+                                        .ok();
+                                }
                             }
                         }
                     }

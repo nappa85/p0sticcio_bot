@@ -23,7 +23,8 @@ pub struct Zone {
 #[derive(Deserialize)]
 pub struct Filter {
     #[serde(rename = "sendAll")]
-    pub send_all: bool,
+    pub send_all: Option<bool>,
+    pub resume: Option<bool>,
     // pub portals: Option<Vec<(Decimal, Decimal)>>,
     pub portals: Option<Vec<String>>,
     #[serde(rename = "minMU")]
@@ -167,7 +168,7 @@ impl Filter {
                 }
             }
         }
-        self.send_all
+        self.send_all.unwrap_or_default()
     }
 }
 
