@@ -408,11 +408,15 @@ pub struct Portal<'a> {
     pub lon: Decimal,
 }
 
-// impl<'a> Portal<'a> {
-//     pub fn get_coords(&self) -> (Decimal, Decimal) {
-//         (self.lat, self.lon)
-//     }
-// }
+impl<'a> Portal<'a> {
+    // pub fn get_coords(&self) -> (Decimal, Decimal) {
+    //     (self.lat, self.lon)
+    // }
+    // this method is the same as Display, but with a bold tag on the name
+    pub fn to_string_bold(self) -> String {
+        format!("<a href=\"https://intel.ingress.com/intel?pll={},{}\"><b>{}</b></a> (<a href=\"https://maps.google.it/maps/?q={},{}\">{}</a>)", self.lat, self.lon, self.name, self.lat, self.lon, self.address)
+    }
+}
 
 impl<'a> std::fmt::Display for Portal<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

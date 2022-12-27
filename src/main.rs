@@ -19,7 +19,10 @@ use lru_time_cache::LruCache;
 
 use once_cell::sync::Lazy;
 
-use rust_decimal::{prelude::FromPrimitive, Decimal};
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
 
 use serde_json::json;
 
@@ -135,7 +138,7 @@ async fn main() {
         .zones
         .iter()
         .flat_map(|z| {
-            z.users.iter().map(|(id, _)| {
+            z.users.keys().map(|id| {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let global_tx = global_tx.clone();
                 let id = *id;
@@ -444,13 +447,32 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                     }
                 }
                 if !list.is_empty() {
+                    let distances = list
+                        .values()
+                        .flat_map(|sublist| sublist.iter())
+                        .map(|p1| {
+                            (
+                                (p1.lat, p1.lon),
+                                list.values()
+                                    .flat_map(|sublist| {
+                                        sublist.iter().flat_map(|p2| calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon)))
+                                    })
+                                    .sum::<f64>(),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+                    let min_distance = distances.values().min_by(|a, b| a.partial_cmp(b).unwrap());
                     for ((level, faction), mut sublist) in list {
                         sublist.sort_unstable_by(|p1, p2| p1.name.cmp(p2.name));
 
                         // split messages to respect 4094 bytes message limit
                         let init = format!("{} L{level} portal:", entities::Team::from(faction));
                         let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
-                            let msg = portal.to_string();
+                            let msg = if distances.get(&(portal.lat, portal.lon)) == min_distance {
+                                portal.to_string_bold()
+                            } else {
+                                portal.to_string()
+                            };
                             let mut slot = msgs.len() - 1;
                             if msgs[slot].len() + msg.len() + 3 > 4094 {
                                 msgs.push(init.clone());
@@ -478,6 +500,22 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
         }
         SCANNING.store(false, Ordering::Relaxed);
     }
+}
+
+fn calc_dist((lat_from, lon_from): (Decimal, Decimal), (lat_to, lon_to): (Decimal, Decimal)) -> Option<f64> {
+    let lat_from = lat_from.to_f64()?.to_radians();
+    let lon_from = lon_from.to_f64()?.to_radians();
+    let lat_to = lat_to.to_f64()?.to_radians();
+    let lon_to = lon_to.to_f64()?.to_radians();
+
+    let lat_delta = lat_to - lat_from;
+    let lon_delta = lon_to - lon_from;
+
+    let angle = 2_f64
+        * ((lat_delta / 2_f64).sin().powi(2) + lat_from.cos() * lat_to.cos() * (lon_delta / 2_f64).sin().powi(2))
+            .sqrt()
+            .asin();
+    Some(angle * 6371_f64)
 }
 
 #[cfg(test)]
