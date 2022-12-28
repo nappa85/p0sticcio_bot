@@ -447,6 +447,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                     }
                 }
                 if !list.is_empty() {
+                    // for each portal, find other portals distances
                     let distances = list
                         .values()
                         .flat_map(|sublist| sublist.iter())
@@ -455,24 +456,34 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                                 (p1.lat, p1.lon),
                                 list.values()
                                     .flat_map(|sublist| {
-                                        sublist.iter().flat_map(|p2| calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon)))
+                                        sublist.iter().flat_map(|p2| {
+                                            let dist = calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon))?;
+                                            (dist < 1.0).then_some(dist)
+                                        })
                                     })
-                                    .sum::<f64>(),
+                                    .fold((0, 0.0), |(count, sum), dist| (count + 1, sum + dist)),
                             )
                         })
                         .collect::<HashMap<_, _>>();
-                    let min_distance = distances.values().min_by(|a, b| a.partial_cmp(b).unwrap());
+                    let biggest_cluster = distances.values().map(|t| t.0).max().unwrap();
+                    let min_distance = distances
+                        .values()
+                        .filter(|t| t.0 == biggest_cluster)
+                        .map(|t| t.1)
+                        .min_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap();
                     for ((level, faction), mut sublist) in list {
                         sublist.sort_unstable_by(|p1, p2| p1.name.cmp(p2.name));
 
                         // split messages to respect 4094 bytes message limit
                         let init = format!("{} L{level} portal:", entities::Team::from(faction));
                         let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
-                            let msg = if distances.get(&(portal.lat, portal.lon)) == min_distance {
-                                portal.to_string_bold()
-                            } else {
-                                portal.to_string()
-                            };
+                            let msg =
+                                if distances.get(&(portal.lat, portal.lon)) == Some(&(biggest_cluster, min_distance)) {
+                                    portal.to_string_bold()
+                                } else {
+                                    portal.to_string()
+                                };
                             let mut slot = msgs.len() - 1;
                             if msgs[slot].len() + msg.len() + 3 > 4094 {
                                 msgs.push(init.clone());
