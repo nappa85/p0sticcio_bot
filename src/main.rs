@@ -447,43 +447,61 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                     }
                 }
                 if !list.is_empty() {
-                    // for each portal, find other portals distances
+                    // for each portal, find other same-faction portals distances
                     let distances = list
-                        .values()
-                        .flat_map(|sublist| sublist.iter())
-                        .map(|p1| {
+                        .iter()
+                        .flat_map(|((_, faction), sublist)| sublist.iter().map(move |p| (faction, p)))
+                        .map(|(f1, p1)| {
                             (
-                                (p1.lat, p1.lon),
-                                list.values()
-                                    .flat_map(|sublist| {
+                                (*f1, p1.lat, p1.lon),
+                                list.iter()
+                                    .filter(|((_, f2), _)| f1 == f2)
+                                    .flat_map(|(_, sublist)| {
                                         sublist.iter().flat_map(|p2| {
                                             let dist = calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon))?;
+                                            // limit to 1 Km distances
                                             (dist < 1.0).then_some(dist)
                                         })
                                     })
                                     .fold((0, 0.0), |(count, sum), dist| (count + 1, sum + dist)),
                             )
                         })
+                        .fold(HashMap::new(), |mut acc, ((f, lat, lon), t)| {
+                            let faction = acc.entry(f).or_insert_with(HashMap::new);
+                            faction.insert((lat, lon), t);
+                            acc
+                        });
+                    let biggest_cluster = distances
+                        .iter()
+                        .map(|(f, v)| (*f, v.values().map(|t| t.0).max().unwrap()))
                         .collect::<HashMap<_, _>>();
-                    let biggest_cluster = distances.values().map(|t| t.0).max().unwrap();
                     let min_distance = distances
-                        .values()
-                        .filter(|t| t.0 == biggest_cluster)
-                        .map(|t| t.1)
-                        .min_by(|a, b| a.partial_cmp(b).unwrap())
-                        .unwrap();
+                        .iter()
+                        .map(|(f, v)| {
+                            (
+                                *f,
+                                v.values()
+                                    .filter(|t| t.0 == biggest_cluster[f])
+                                    .map(|t| t.1)
+                                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                                    .unwrap(),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+
                     for ((level, faction), mut sublist) in list {
                         sublist.sort_unstable_by(|p1, p2| p1.name.cmp(p2.name));
 
                         // split messages to respect 4094 bytes message limit
                         let init = format!("{} L{level} portal:", entities::Team::from(faction));
                         let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
-                            let msg =
-                                if distances.get(&(portal.lat, portal.lon)) == Some(&(biggest_cluster, min_distance)) {
-                                    portal.to_string_bold()
-                                } else {
-                                    portal.to_string()
-                                };
+                            let msg = if distances[&faction].get(&(portal.lat, portal.lon))
+                                == Some(&(biggest_cluster[&faction], min_distance[&faction]))
+                            {
+                                portal.to_string_bold()
+                            } else {
+                                portal.to_string()
+                            };
                             let mut slot = msgs.len() - 1;
                             if msgs[slot].len() + msg.len() + 3 > 4094 {
                                 msgs.push(init.clone());
