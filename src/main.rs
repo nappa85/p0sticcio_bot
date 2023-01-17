@@ -495,19 +495,19 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                         // split messages to respect 4094 bytes message limit
                         let init = format!("{} L{level} portal:", entities::Team::from(faction));
                         let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
-                            let msg = if distances[&faction].get(&(portal.lat, portal.lon))
-                                == Some(&(biggest_cluster[&faction], min_distance[&faction]))
-                            {
-                                portal.to_string_bold()
-                            } else {
-                                portal.to_string()
-                            };
+                            let msg = portal.to_string();
                             let mut slot = msgs.len() - 1;
                             if msgs[slot].len() + msg.len() + 3 > 4094 {
                                 msgs.push(init.clone());
                                 slot += 1;
                             }
-                            msgs[slot].push_str("\n* ");
+                            if distances[&faction].get(&(portal.lat, portal.lon))
+                                == Some(&(biggest_cluster[&faction], min_distance[&faction]))
+                            {
+                                msgs[slot].push_str("\n> ");
+                            } else {
+                                msgs[slot].push_str("\n* ");
+                            }
                             msgs[slot].push_str(&msg);
                             msgs
                         });
