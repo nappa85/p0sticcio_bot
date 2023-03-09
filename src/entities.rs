@@ -334,15 +334,19 @@ impl<'a> DedupFlatten for Plext<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Team {
+    Neutral,
     Enlightened,
     Resistance,
+    Machina,
 }
 
 impl From<Faction> for Team {
     fn from(f: Faction) -> Self {
         match f {
+            Faction::Neutral => Team::Neutral,
             Faction::Enlightened => Team::Enlightened,
             Faction::Resistance => Team::Resistance,
+            Faction::Machina => Team::Machina,
         }
     }
 }
@@ -351,10 +355,12 @@ impl<'a> TryFrom<Option<&'a str>> for Team {
     type Error = ();
     fn try_from(s: Option<&'a str>) -> Result<Self, Self::Error> {
         match s {
+            Some("NEUTRAL") => Ok(Team::Neutral),
             Some("ENLIGHTENED") => Ok(Team::Enlightened),
             Some("RESISTANCE") => Ok(Team::Resistance),
-            _ => {
-                error!("Unrecognized team {:?}", s);
+            Some("MACHINA") => Ok(Team::Machina),
+            s => {
+                error!("Unrecognized team {s:?}");
                 Err(())
             }
         }
@@ -364,8 +370,10 @@ impl<'a> TryFrom<Option<&'a str>> for Team {
 impl std::fmt::Display for Team {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Team::Neutral => write!(f, "{}", symbols::WHITE),
             Team::Enlightened => write!(f, "{}", symbols::GREEN),
             Team::Resistance => write!(f, "{}", symbols::BLUE),
+            Team::Machina => write!(f, "{}", symbols::RED),
         }
     }
 }
