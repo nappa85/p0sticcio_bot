@@ -439,7 +439,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                         portal.get_latitude().and_then(Decimal::from_f64),
                         portal.get_longitude().and_then(Decimal::from_f64),
                     ) {
-                        if level < 7 {
+                        if level < 7 || faction.is_machina() {
                             continue;
                         }
                         let sublist = list.entry((level, faction)).or_insert_with(Vec::new);
