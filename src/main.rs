@@ -467,7 +467,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                             )
                         })
                         .fold(HashMap::new(), |mut acc, ((f, lat, lon), t)| {
-                            let faction = acc.entry(f).or_insert_with(HashMap::new);
+                            let faction: &mut HashMap<_, _> = acc.entry(f).or_default();
                             faction.insert((lat, lon), t);
                             acc
                         });

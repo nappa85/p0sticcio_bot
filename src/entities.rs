@@ -31,8 +31,8 @@ impl<'a> From<&'a [Markup]> for PlextType {
                 " destroyed a Control Field @" => Some(PlextType::DestroyedCF),
                 " deployed a Resonator on " => Some(PlextType::DeployedReso),
                 " destroyed a Resonator on " => Some(PlextType::DestroyedReso),
-                " destroyed the Link " => Some(PlextType::DestroyedLink),
-                " linked " => Some(PlextType::Linked),
+                " destroyed the " => Some(PlextType::DestroyedLink),
+                " linked from " => Some(PlextType::Linked),
                 "Drone returned to Agent by " => Some(PlextType::DroneReturn),
                 " deployed a Beacon on " => Some(PlextType::DeployedBeacon),
                 " deployed Fireworks on " => Some(PlextType::DeployedFireworks),
@@ -200,36 +200,36 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
             PlextType::DestroyedLink => Plext::DestroyedLink {
                 player: plext
                     .markup
-                    .get(0)
-                    .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
+                    .get(1)
+                    .ok_or_else(|| error!("Can't find player on markup 1: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 source: plext
                     .markup
-                    .get(2)
-                    .ok_or_else(|| error!("Can't find source on markup 2: {:?}", plext))
+                    .get(5)
+                    .ok_or_else(|| error!("Can't find source on markup 5: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 target: plext
                     .markup
-                    .get(4)
-                    .ok_or_else(|| error!("Can't find target on markup 4: {:?}", plext))
+                    .get(7)
+                    .ok_or_else(|| error!("Can't find target on markup 7: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 time,
             },
             PlextType::Linked => Plext::Linked {
                 player: plext
                     .markup
-                    .get(0)
-                    .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
+                    .get(2)
+                    .ok_or_else(|| error!("Can't find player on markup 2: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 source: plext
                     .markup
-                    .get(2)
-                    .ok_or_else(|| error!("Can't find source on markup 2: {:?}", plext))
+                    .get(4)
+                    .ok_or_else(|| error!("Can't find source on markup 4: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 target: plext
                     .markup
-                    .get(4)
-                    .ok_or_else(|| error!("Can't find target on markup 4: {:?}", plext))
+                    .get(6)
+                    .ok_or_else(|| error!("Can't find target on markup 6: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 time,
             },
