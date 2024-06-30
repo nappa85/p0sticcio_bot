@@ -28,11 +28,11 @@ impl<'a> From<&'a [Markup]> for PlextType {
             .find_map(|(_, markup)| match markup.plain.as_str() {
                 " captured " => Some(PlextType::Captured),
                 " created a Control Field @" => Some(PlextType::CreatedCF),
-                " destroyed a Control Field @" => Some(PlextType::DestroyedCF),
+                " Control Field @" => Some(PlextType::DestroyedCF),
                 " deployed a Resonator on " => Some(PlextType::DeployedReso),
                 " destroyed a Resonator on " => Some(PlextType::DestroyedReso),
-                " destroyed the " => Some(PlextType::DestroyedLink),
-                " linked from " => Some(PlextType::Linked),
+                " Link " => Some(PlextType::DestroyedLink),
+                " linked from " | " linked " => Some(PlextType::Linked),
                 "Drone returned to Agent by " => Some(PlextType::DroneReturn),
                 " deployed a Beacon on " => Some(PlextType::DeployedBeacon),
                 " deployed Fireworks on " => Some(PlextType::DeployedFireworks),
@@ -125,7 +125,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
             PlextType::Captured => Plext::Captured {
                 player: plext
                     .markup
-                    .get(0)
+                    .first()
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 portal: plext
@@ -135,46 +135,92 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                     .and_then(TryInto::try_into)?,
                 time,
             },
-            PlextType::CreatedCF => Plext::CreatedCF {
-                player: plext
-                    .markup
-                    .get(0)
-                    .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                portal: plext
-                    .markup
-                    .get(2)
-                    .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                mu: plext
-                    .markup
-                    .get(4)
-                    .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
-                    .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
-                time,
-            },
-            PlextType::DestroyedCF => Plext::DestroyedCF {
-                player: plext
-                    .markup
-                    .get(0)
-                    .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                portal: plext
-                    .markup
-                    .get(2)
-                    .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                mu: plext
-                    .markup
-                    .get(4)
-                    .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
-                    .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
-                time,
-            },
+            // TODO: replace with try blocks when stabilized
+            PlextType::CreatedCF => (|| {
+                Ok(Plext::CreatedCF {
+                    player: plext
+                        .markup
+                        .first()
+                        .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    portal: plext
+                        .markup
+                        .get(2)
+                        .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    mu: plext
+                        .markup
+                        .get(4)
+                        .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
+                        .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
+                    time,
+                })
+            })()
+            .or_else(|_: ()| {
+                Ok(Plext::CreatedCF {
+                    player: plext
+                        .markup
+                        .get(2)
+                        .ok_or_else(|| error!("Can't find player on markup 2: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    portal: plext
+                        .markup
+                        .get(4)
+                        .ok_or_else(|| error!("Can't find portal on markup 4: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    mu: plext
+                        .markup
+                        .get(6)
+                        .ok_or_else(|| error!("Can't find mu on markup 6: {:?}", plext))
+                        .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
+                    time,
+                })
+            })?,
+            // TODO: replace with try blocks when stabilized
+            PlextType::DestroyedCF => (|| {
+                Ok(Plext::DestroyedCF {
+                    player: plext
+                        .markup
+                        .first()
+                        .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    portal: plext
+                        .markup
+                        .get(2)
+                        .ok_or_else(|| error!("Can't find portal on markup 2: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    mu: plext
+                        .markup
+                        .get(4)
+                        .ok_or_else(|| error!("Can't find mu on markup 4: {:?}", plext))
+                        .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
+                    time,
+                })
+            })()
+            .or_else(|_: ()| {
+                Ok(Plext::DestroyedCF {
+                    player: plext
+                        .markup
+                        .get(1)
+                        .ok_or_else(|| error!("Can't find player on markup 1: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    portal: plext
+                        .markup
+                        .get(5)
+                        .ok_or_else(|| error!("Can't find portal on markup 5: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    mu: plext
+                        .markup
+                        .get(7)
+                        .ok_or_else(|| error!("Can't find mu on markup 7: {:?}", plext))
+                        .and_then(|(_, m)| m.plain.parse().map_err(|e| error!("Invalid MU value: {}", e)))?,
+                    time,
+                })
+            })?,
             PlextType::DeployedReso => Plext::DeployedReso {
                 player: plext
                     .markup
-                    .get(0)
+                    .first()
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 portal: plext
@@ -187,7 +233,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
             PlextType::DestroyedReso => Plext::DestroyedReso {
                 player: plext
                     .markup
-                    .get(0)
+                    .first()
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 portal: plext
@@ -215,24 +261,47 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                     .and_then(TryInto::try_into)?,
                 time,
             },
-            PlextType::Linked => Plext::Linked {
-                player: plext
-                    .markup
-                    .get(2)
-                    .ok_or_else(|| error!("Can't find player on markup 2: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                source: plext
-                    .markup
-                    .get(4)
-                    .ok_or_else(|| error!("Can't find source on markup 4: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                target: plext
-                    .markup
-                    .get(6)
-                    .ok_or_else(|| error!("Can't find target on markup 6: {:?}", plext))
-                    .and_then(TryInto::try_into)?,
-                time,
-            },
+            // TODO: replace with try blocks when stabilized
+            PlextType::Linked => (|| {
+                Ok(Plext::Linked {
+                    player: plext
+                        .markup
+                        .get(2)
+                        .ok_or_else(|| error!("Can't find player on markup 2: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    source: plext
+                        .markup
+                        .get(4)
+                        .ok_or_else(|| error!("Can't find source on markup 4: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    target: plext
+                        .markup
+                        .get(6)
+                        .ok_or_else(|| error!("Can't find target on markup 6: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    time,
+                })
+            })()
+            .or_else(|_: ()| {
+                Ok(Plext::Linked {
+                    player: plext
+                        .markup
+                        .first()
+                        .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    source: plext
+                        .markup
+                        .get(2)
+                        .ok_or_else(|| error!("Can't find source on markup 2: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    target: plext
+                        .markup
+                        .get(4)
+                        .ok_or_else(|| error!("Can't find target on markup 4: {:?}", plext))
+                        .and_then(TryInto::try_into)?,
+                    time,
+                })
+            })?,
             PlextType::DroneReturn => Plext::DroneReturn {
                 player: plext
                     .markup
@@ -244,7 +313,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
             PlextType::DeployedBeacon => Plext::DeployedBeacon {
                 player: plext
                     .markup
-                    .get(0)
+                    .first()
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 portal: plext
@@ -257,7 +326,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
             PlextType::DeployedFireworks => Plext::DeployedFireworks {
                 player: plext
                     .markup
-                    .get(0)
+                    .first()
                     .ok_or_else(|| error!("Can't find player on markup 0: {:?}", plext))
                     .and_then(TryInto::try_into)?,
                 portal: plext
@@ -380,8 +449,8 @@ impl std::fmt::Display for Team {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Player<'a> {
-    team: Team,
-    name: &'a str,
+    pub team: Team,
+    pub name: &'a str,
 }
 
 impl<'a> Player<'a> {
