@@ -7,9 +7,10 @@ use std::{
 
 use chrono::Utc;
 
-use futures_util::{stream::unfold, Stream, StreamExt};
+use futures_util::StreamExt;
 
 use ingress_intel_rs::{
+    entities::IntelResult,
     plexts::Tab,
     portal_details::{IntelMod, IntelPortal, IntelResonator},
     Intel,
@@ -24,15 +25,18 @@ use rust_decimal::{
     Decimal,
 };
 
+use sea_orm::{ConnectionTrait, Database};
 use serde_json::json;
 
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
 
 use tokio::{sync::mpsc, time};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use tracing::{debug, error, info, warn};
 
 mod config;
+mod database;
 mod dedup_flatten;
 mod entities;
 mod symbols;
@@ -53,16 +57,9 @@ static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(30))
         .build()
-        .unwrap()
+        .expect("Client build failed")
 });
 static SCANNING: AtomicBool = AtomicBool::new(false);
-
-fn make_stream<T>(rx: mpsc::UnboundedReceiver<T>) -> impl Stream<Item = T> {
-    unfold(rx, |mut rx| async {
-        let next = rx.recv().await?;
-        Some((next, rx))
-    })
-}
 
 #[derive(Debug)]
 enum Bot {
@@ -90,14 +87,16 @@ async fn main() {
     println!("Started version {}", env!("CARGO_PKG_VERSION"));
     tracing_subscriber::fmt::init();
 
-    let config = config::get().await.unwrap();
+    let config = config::get().await.expect("Config read failed");
+
+    let conn = Database::connect("sqlite:p0sticcio.sqlite3").await.expect("Database connection failed");
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
-        make_stream(global_rx)
+        UnboundedReceiverStream::new(global_rx)
             .throttle(pool)
             .for_each_concurrent(None, |(user_id, msg): (u64, Bot)| async move {
                 for i in 0..10 {
@@ -146,7 +145,7 @@ async fn main() {
                     // We can send a single message per telegram chat per second
                     let rate = ThrottleRate::new(1, Duration::from_secs(1));
                     let pool = ThrottlePool::new(rate);
-                    make_stream(rx)
+                    UnboundedReceiverStream::new(rx)
                         .throttle(pool)
                         .for_each(|msg| {
                             global_tx.send((id, msg)).map_err(|e| error!("Sender error: {}", e)).ok();
@@ -170,19 +169,111 @@ async fn main() {
             .await;
     }
 
-    intel.login().await.unwrap();
+    intel.login().await.expect("Intel login failed");
 
+    let (portal_tx, portal_rx) = mpsc::unbounded_channel();
+
+    let conn = &conn;
     let config = &config;
     let intel = &intel;
     let senders = &senders;
     tokio::select! {
-        _ = comm_survey(config, intel, senders) => {},
+        _ = comm_survey(config, intel, senders, portal_tx.clone()) => {},
         _ = portal_survey(config, intel, senders) => {},
-        _ = map_survey(config, intel, senders) => {},
+        _ = map_survey(conn, config, intel, senders, portal_tx) => {},
+        _ = portal_scanner(conn, intel, portal_rx) => {},
     };
 }
 
-async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
+async fn get_portal_details_with_retry(
+    intel: &Intel<'_>,
+    portal_id: &str,
+) -> Result<ingress_intel_rs::portal_details::IntelResponse, ingress_intel_rs::Error> {
+    for i in 1..11 {
+        match intel.get_portal_details(portal_id).await {
+            Ok(portal) => return Ok(portal),
+            Err(ingress_intel_rs::Error::Transport) | Err(ingress_intel_rs::Error::Status) if i < 10 => {
+                debug!("get_portal_details({portal_id}) retry {i}");
+                time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!()
+}
+
+async fn get_entities_around_with_retry(
+    intel: &Intel<'_>,
+    lat: f64,
+    lon: f64,
+) -> Result<Option<String>, ingress_intel_rs::Error> {
+    for i in 1..11 {
+        let res = match intel.get_entities_around(lat, lon, Some(15), None, None, None).await {
+            Ok(res) => res,
+            Err(err) => {
+                error!("Error searching for portal on coordinates {lat},{lon} retry {i}: {err}");
+                continue;
+            }
+        };
+
+        match res
+            .result
+            .map
+            .iter()
+            .flat_map(|(_id, entity)| match entity {
+                IntelResult::Error(_) => &[],
+                IntelResult::Entities(e) => e.entities.as_slice(),
+            })
+            .find_map(|entity| {
+                if entity.get_latitude().is_some_and(|l| (lat - l).abs() < 0.000001)
+                    && entity.get_longitude().is_some_and(|l| (lon - l).abs() < 0.000001)
+                {
+                    entity.get_id()
+                } else {
+                    None
+                }
+            }) {
+            Some(id) => return Ok(Some(id.to_owned())),
+            None => {
+                warn!(
+                    "Can't find portal on coordinates {lat},{lon} retry {i} between {:?}",
+                    res.result
+                        .map
+                        .into_values()
+                        .map(|entity| match entity {
+                            IntelResult::Error(err) => Err(err.error),
+                            IntelResult::Entities(e) => Ok(e
+                                .entities
+                                .into_iter()
+                                .filter_map(|entity| entity
+                                    .get_id()
+                                    .map(ToOwned::to_owned)
+                                    .zip(entity.get_latitude())
+                                    .zip(entity.get_longitude()))
+                                .collect::<Vec<_>>()),
+                        })
+                        .collect::<Vec<_>>()
+                );
+                continue;
+            }
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug)]
+enum PortalOrCoords {
+    Portal { id: String },
+    Coords { lat: f64, lon: f64 },
+}
+
+async fn comm_survey(
+    config: &config::Config,
+    intel: &Intel<'static>,
+    senders: &Senders,
+    portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
+) {
     let mut interval = time::interval(Duration::from_secs(30)); // main comm interval
     let mut sent_cache: Vec<LruCache<String, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
@@ -211,9 +302,19 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
                         .rev()
                         .filter_map(|(_id, time, plext)| {
                             let msg_type = entities::PlextType::from(plext.plext.markup.as_slice());
-                            entities::Plext::try_from((msg_type, &plext.plext, *time))
+                            let plext = entities::Plext::try_from((msg_type, &plext.plext, *time))
                                 .map_err(|_| error!("Unable to create {:?} from {:?}", msg_type, plext.plext))
-                                .ok()
+                                .ok()?;
+                            if plext.should_scan() {
+                                let _ = portal_tx.send((
+                                    PortalOrCoords::Coords {
+                                        lat: plext.get_lat().unwrap(),
+                                        lon: plext.get_lon().unwrap(),
+                                    },
+                                    *time,
+                                ));
+                            }
+                            Some(plext)
                         })
                         .collect::<Vec<_>>();
                     let msgs = dedup_flatten::windows_dedup_flatten(plexts.clone(), 8);
@@ -258,6 +359,43 @@ async fn comm_survey(config: &config::Config, intel: &Intel<'static>, senders: &
     }
 }
 
+async fn portal_scanner<C>(
+    conn: &C,
+    intel: &Intel<'static>,
+    mut portal_rx: mpsc::UnboundedReceiver<(PortalOrCoords, i64)>,
+) where
+    C: ConnectionTrait,
+{
+    while let Some((poc, time)) = portal_rx.recv().await {
+        let id = match poc {
+            PortalOrCoords::Portal { id } => id,
+            PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(intel, lat, lon).await {
+                Ok(Some(id)) => id,
+                _ => continue,
+            },
+        };
+
+        if let Ok(portal) = database::portal::Entity::get_latest_revision(conn, &id)
+            .await
+            .map_err(|err| error!("Portal {id} retrieve error: {err}"))
+        {
+            // scan portal only if informations are outdated
+            if portal.is_none() || portal.as_ref().is_some_and(|portal| portal.timestamp < time) {
+                if let Ok(res) = get_portal_details_with_retry(intel, &id)
+                    .await
+                    .map_err(|err| error!("Portal {id} scan error: {err}"))
+                {
+                    let _ = database::portal::update_or_insert(conn, &id, time, portal, res.result)
+                        .await
+                        .map_err(|err| error!("Portal {id} save error: {err}"));
+                }
+                // wait only if we have effectively tried to scan the portal
+                time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+}
+
 struct PortalCache {
     name: String,
     coords: (f64, f64),
@@ -268,7 +406,7 @@ struct PortalCache {
 impl From<IntelPortal> for PortalCache {
     fn from(p: IntelPortal) -> Self {
         PortalCache {
-            name: p.get_name().to_owned(),
+            name: p.get_title().to_owned(),
             coords: (p.get_latitude(), p.get_longitude()),
             mods: p.get_mods().to_vec(),
             resonators: p.get_resonators().to_vec(),
@@ -376,7 +514,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
     loop {
         for (portal_id, users) in &portals {
             interval.tick().await;
-            match intel.get_portal_details(portal_id).await {
+            match get_portal_details_with_retry(intel, portal_id).await {
                 Ok(res) => {
                     let new_cache = PortalCache::from(res.result);
                     if let Some(cached) = cache.get(portal_id) {
@@ -403,11 +541,19 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
     }
 }
 
-async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
+async fn map_survey<C>(
+    conn: &C,
+    config: &config::Config,
+    intel: &Intel<'static>,
+    senders: &Senders,
+    portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
+) where
+    C: ConnectionTrait,
+{
     loop {
         let now = Utc::now().naive_utc();
-        let next_trigger = now.date().and_hms_opt(0, 0, 0).unwrap() + chrono::Duration::days(1);
-        time::sleep((next_trigger - now).to_std().unwrap()).await;
+        let next_trigger = now.date().and_hms_opt(0, 0, 0).expect("Midnight failed") + chrono::Duration::days(1);
+        time::sleep((next_trigger - now).to_std().expect("Duration conversion failed")).await;
         SCANNING.store(true, Ordering::Relaxed);
         for zone in config.zones.iter() {
             let from_lat = zone.from[0] as f64 / 1000000_f64;
@@ -430,6 +576,13 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                 for portal in entities.iter().flat_map(|e| &e.entities) {
                     if !portal.is_portal() {
                         continue;
+                    }
+
+                    if database::portal::should_scan(conn, portal).await {
+                        let _ = portal_tx.send((
+                            PortalOrCoords::Portal { id: portal.get_id().unwrap().to_owned() },
+                            portal.get_timestamp().unwrap() as i64,
+                        ));
                     }
 
                     if let (Some(name), Some(level), Some(faction), Some(lat), Some(lon)) = (
@@ -473,7 +626,7 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                         });
                     let biggest_cluster = distances
                         .iter()
-                        .map(|(f, v)| (*f, v.values().map(|t| t.0).max().unwrap()))
+                        .map(|(f, v)| (*f, v.values().map(|t| t.0).max().expect("Cluster max failed")))
                         .collect::<HashMap<_, _>>();
                     let min_distance = distances
                         .iter()
@@ -483,8 +636,8 @@ async fn map_survey(config: &config::Config, intel: &Intel<'static>, senders: &S
                                 v.values()
                                     .filter(|t| t.0 == biggest_cluster[f])
                                     .map(|t| t.1)
-                                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                                    .unwrap(),
+                                    .min_by(|a, b| a.partial_cmp(b).expect("Distance compare failed"))
+                                    .expect("Distance min failed"),
                             )
                         })
                         .collect::<HashMap<_, _>>();

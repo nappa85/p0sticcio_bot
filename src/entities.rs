@@ -1,6 +1,6 @@
 use ingress_intel_rs::{entities::Faction, plexts::Markup};
 
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 
 use tracing::error;
 
@@ -389,6 +389,36 @@ impl<'a> Plext<'a> {
                 others.iter().any(|m| m == &Plext::Captured { player: *player, portal: *portal, time: *time })
             }
             _ => false,
+        }
+    }
+
+    pub fn should_scan(&self) -> bool {
+        matches!(
+            self,
+            Plext::Captured { .. }
+                | Plext::DeployedReso { .. }
+                | Plext::DestroyedReso { .. }
+                | Plext::MaybeVirus { .. }
+        )
+    }
+
+    pub fn get_lat(&self) -> Option<f64> {
+        match self {
+            Plext::Captured { portal, .. }
+            | Plext::DeployedReso { portal, .. }
+            | Plext::DestroyedReso { portal, .. }
+            | Plext::MaybeVirus { portal, .. } => portal.lat.to_f64(),
+            _ => None,
+        }
+    }
+
+    pub fn get_lon(&self) -> Option<f64> {
+        match self {
+            Plext::Captured { portal, .. }
+            | Plext::DeployedReso { portal, .. }
+            | Plext::DestroyedReso { portal, .. }
+            | Plext::MaybeVirus { portal, .. } => portal.lon.to_f64(),
+            _ => None,
         }
     }
 }
