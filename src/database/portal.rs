@@ -1,58 +1,40 @@
 use ingress_intel_rs::{entities, portal_details};
-use sea_orm::{entity::prelude::*, ActiveValue, QuerySelect, SelectColumns};
+use sea_orm::{entity::prelude::*, ActiveValue, QuerySelect, SelectColumns, TransactionTrait};
 use tracing::error;
 
-use super::{portal_mods, portal_resonators};
+use super::{portal_mods, portal_resonators, portal_revision};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "portals")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub id: String,
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub revision: i64,
-    pub timestamp: i64,
+    #[sea_orm(primary_key)]
+    pub id: i64,
+    pub portal_id: String,
+    pub latest_revision_id: i64,
     pub latitude: f64,
     pub longitude: f64,
-    pub faction: Faction,
-    pub level: i32,
-    pub health: i32,
-    pub res_count: i32,
     pub image: Option<String>,
     pub title: String,
-    pub owner: Option<String>,
 }
 
 impl Model {
-    pub async fn mods<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_mods::Model>, DbErr> {
-        portal_mods::Entity::find()
-            .filter(
-                portal_mods::Column::PortalId
-                    .eq(self.id.as_str())
-                    .and(portal_mods::Column::PortalRevision.eq(self.revision)),
-            )
-            .all(conn)
-            .await
-    }
-
-    pub async fn resonators<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_resonators::Model>, DbErr> {
-        portal_resonators::Entity::find()
-            .filter(
-                portal_resonators::Column::PortalId
-                    .eq(self.id.as_str())
-                    .and(portal_resonators::Column::PortalRevision.eq(self.revision)),
-            )
-            .all(conn)
-            .await
+    pub async fn get_latest_revision<C: ConnectionTrait>(
+        &self,
+        conn: &C,
+    ) -> Result<Option<portal_revision::Model>, DbErr> {
+        portal_revision::Entity::find_by_id(self.latest_revision_id).one(conn).await
     }
 }
 
 impl Entity {
-    pub async fn get_latest_revision<C: ConnectionTrait>(conn: &C, id: &str) -> Result<Option<Model>, DbErr> {
-        let Some(Some(revision)) = Entity::find()
-            .filter(Column::Id.eq(id))
+    pub async fn get_latest_revision<C: ConnectionTrait>(
+        conn: &C,
+        portal_id: &str,
+    ) -> Result<Option<portal_revision::Model>, DbErr> {
+        let Some(Some(revision_id)) = Entity::find()
+            .filter(Column::PortalId.eq(portal_id))
             .select_only()
-            .select_column_as(Column::Revision.max(), "revision")
+            .select_column(Column::LatestRevisionId)
             .into_tuple::<Option<i64>>()
             .one(conn)
             .await?
@@ -60,7 +42,7 @@ impl Entity {
             return Ok(None);
         };
 
-        Entity::find_by_id((id.to_owned(), revision)).one(conn).await
+        portal_revision::Entity::find_by_id(revision_id).one(conn).await
     }
 }
 
@@ -68,30 +50,6 @@ impl Entity {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(Some(1))")]
-pub enum Faction {
-    #[sea_orm(string_value = "N")]
-    Neutral,
-    #[sea_orm(string_value = "E")]
-    Enlightened,
-    #[sea_orm(string_value = "R")]
-    Resistance,
-    #[sea_orm(string_value = "M")]
-    Machina,
-}
-
-impl From<entities::Faction> for Faction {
-    fn from(value: ingress_intel_rs::entities::Faction) -> Self {
-        match value {
-            entities::Faction::Neutral => Faction::Neutral,
-            entities::Faction::Enlightened => Faction::Enlightened,
-            entities::Faction::Resistance => Faction::Resistance,
-            entities::Faction::Machina => Faction::Machina,
-        }
-    }
-}
 
 pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelEntity) -> bool {
     let Some(id) = portal.get_id() else {
@@ -130,18 +88,15 @@ pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelE
     // let owner = portal.get_owner();
 
     // at this point we don't care if the portal has been moved or renamed
-    let Model {
+    let portal_revision::Model {
         id: _,
+        portal_id: _,
         revision: _,
         timestamp: _,
-        latitude: _,
-        longitude: _,
         faction: old_faction,
         level: old_level,
         health: old_health,
         res_count: old_res_count,
-        image: _,
-        title: _,
         owner: _,
     } = match Entity::get_latest_revision(conn, id).await {
         Ok(Some(model)) => model,
@@ -152,61 +107,104 @@ pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelE
         }
     };
 
-    Faction::from(faction) != old_faction
+    portal_revision::Faction::from(faction) != old_faction
         || level != old_level as u8
         || health != old_health as u8
         || res_count != old_res_count as u8
 }
 
-pub async fn update_or_insert<C: ConnectionTrait>(
+pub async fn update_or_insert<C: TransactionTrait>(
     conn: &C,
     id: &str,
     timestamp: i64,
-    old_model: Option<Model>,
+    old_model: Option<portal_revision::Model>,
     portal: portal_details::IntelPortal,
 ) -> Result<(), DbErr> {
-    let model = ActiveModel {
-        id: ActiveValue::Set(id.to_owned()),
+    let txn = conn.begin().await?;
+
+    let portal_model = if let Some(old_model) = &old_model {
+        let Some(portal_model) = Entity::find_by_id(old_model.portal_id).one(&txn).await? else {
+            return Err(DbErr::RecordNotFound(format!("Can't find portal with id {}", old_model.portal_id)));
+        };
+
+        if portal_model.latitude != portal.get_latitude()
+            || portal_model.longitude != portal.get_longitude()
+            || portal_model.image.as_deref() != portal.get_image()
+            || portal_model.title != portal.get_title()
+        {
+            ActiveModel {
+                id: ActiveValue::Set(portal_model.id),
+                portal_id: ActiveValue::Set(id.to_owned()),
+                latest_revision_id: ActiveValue::Set(portal_model.latest_revision_id),
+                latitude: ActiveValue::Set(portal.get_latitude()),
+                longitude: ActiveValue::Set(portal.get_longitude()),
+                image: ActiveValue::Set(portal.get_image().map(ToOwned::to_owned)),
+                title: ActiveValue::Set(portal.get_title().to_owned()),
+            }
+            .update(&txn)
+            .await?
+        } else {
+            portal_model
+        }
+    } else {
+        ActiveModel {
+            portal_id: ActiveValue::Set(id.to_owned()),
+            latest_revision_id: ActiveValue::Set(0),
+            latitude: ActiveValue::Set(portal.get_latitude()),
+            longitude: ActiveValue::Set(portal.get_longitude()),
+            image: ActiveValue::Set(portal.get_image().map(ToOwned::to_owned)),
+            title: ActiveValue::Set(portal.get_title().to_owned()),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await?
+    };
+
+    let revision_model = portal_revision::ActiveModel {
+        portal_id: ActiveValue::Set(portal_model.id),
         revision: ActiveValue::Set(old_model.as_ref().map(|model| model.revision + 1).unwrap_or_default()),
         timestamp: ActiveValue::Set(timestamp),
-        latitude: ActiveValue::Set(portal.get_latitude()),
-        longitude: ActiveValue::Set(portal.get_longitude()),
-        faction: ActiveValue::Set(Faction::from(portal.get_faction().expect("missing faction"))),
+        faction: ActiveValue::Set(portal_revision::Faction::from(portal.get_faction().expect("missing faction"))),
         level: ActiveValue::Set(i32::from(portal.get_level())),
         health: ActiveValue::Set(i32::from(portal.get_health())),
         res_count: ActiveValue::Set(i32::from(portal.get_res_count())),
-        image: ActiveValue::Set(portal.get_image().map(ToOwned::to_owned)),
-        title: ActiveValue::Set(portal.get_title().to_owned()),
         owner: ActiveValue::Set(portal.get_owner().map(ToOwned::to_owned)),
+        ..Default::default()
     }
-    .insert(conn)
+    .insert(&txn)
+    .await?;
+
+    ActiveModel {
+        id: ActiveValue::Set(portal_model.id),
+        latest_revision_id: ActiveValue::Set(revision_model.id),
+        ..Default::default()
+    }
+    .update(&txn)
     .await?;
 
     for r#mod in portal.get_mods().iter().flatten() {
         portal_mods::ActiveModel {
-            portal_id: ActiveValue::Set(model.id.clone()),
-            portal_revision: ActiveValue::Set(model.revision),
+            revision_id: ActiveValue::Set(revision_model.id),
             mod_owner: ActiveValue::Set(r#mod.get_owner().to_owned()),
             mod_name: ActiveValue::Set(r#mod.get_name().to_owned()),
             mod_rarity: ActiveValue::Set(r#mod.get_rarity().to_owned()),
             ..Default::default()
         }
-        .insert(conn)
+        .insert(&txn)
         .await?;
     }
 
     for reso in portal.get_resonators().iter().flatten() {
         portal_resonators::ActiveModel {
-            portal_id: ActiveValue::Set(model.id.clone()),
-            portal_revision: ActiveValue::Set(model.revision),
+            revision_id: ActiveValue::Set(revision_model.id),
             reso_owner: ActiveValue::Set(reso.get_owner().to_owned()),
             reso_level: ActiveValue::Set(i32::from(reso.get_level())),
             reso_energy: ActiveValue::Set(i32::from(reso.get_energy())),
             ..Default::default()
         }
-        .insert(conn)
+        .insert(&txn)
         .await?;
     }
 
-    Ok(())
+    txn.commit().await
 }

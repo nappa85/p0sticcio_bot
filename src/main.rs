@@ -25,7 +25,7 @@ use rust_decimal::{
     Decimal,
 };
 
-use sea_orm::{ConnectionTrait, Database};
+use sea_orm::{ConnectionTrait, Database, TransactionTrait};
 use serde_json::json;
 
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
@@ -89,7 +89,8 @@ async fn main() {
 
     let config = config::get().await.expect("Config read failed");
 
-    let conn = Database::connect("sqlite:p0sticcio.sqlite3").await.expect("Database connection failed");
+    let conn =
+        Database::connect("mysql://mariadb:mariadb@mariadb/p0sticcio_bot").await.expect("Database connection failed");
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
@@ -364,7 +365,7 @@ async fn portal_scanner<C>(
     intel: &Intel<'static>,
     mut portal_rx: mpsc::UnboundedReceiver<(PortalOrCoords, i64)>,
 ) where
-    C: ConnectionTrait,
+    C: ConnectionTrait + TransactionTrait,
 {
     while let Some((poc, time)) = portal_rx.recv().await {
         let id = match poc {
