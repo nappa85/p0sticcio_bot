@@ -6,33 +6,23 @@ use std::{
 };
 
 use chrono::Utc;
-
 use futures_util::StreamExt;
-
 use ingress_intel_rs::{
     entities::IntelResult,
     plexts::Tab,
     portal_details::{IntelMod, IntelPortal, IntelResonator},
     Intel,
 };
-
 use lru_time_cache::LruCache;
-
-use once_cell::sync::Lazy;
-
 use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
     Decimal,
 };
-
 use sea_orm::{ConnectionTrait, Database, TransactionTrait};
-use serde_json::json;
-
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
-
+use tgbot::types::{LinkPreviewOptions, ParseMode, SendMessage};
 use tokio::{sync::mpsc, time};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-
 use tracing::{debug, error, info, warn};
 
 mod config;
@@ -43,22 +33,6 @@ mod symbols;
 
 type Senders = HashMap<u64, mpsc::UnboundedSender<Bot>>;
 
-static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
-static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
-static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
-static BOT_URL1: Lazy<String> = Lazy::new(|| {
-    format!("https://api.telegram.org/bot{}/sendMessage", env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1"))
-});
-static BOT_URL2: Lazy<String> = Lazy::new(|| {
-    format!("https://api.telegram.org/bot{}/sendMessage", env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2"))
-});
-static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(30))
-        .build()
-        .expect("Client build failed")
-});
 static SCANNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
@@ -74,12 +48,6 @@ impl Bot {
             Bot::Portal(s) => s.as_str(),
         }
     }
-    fn get_url(&self) -> &str {
-        match self {
-            Bot::Comm(_) => BOT_URL1.as_str(),
-            Bot::Portal(_) => BOT_URL2.as_str(),
-        }
-    }
 }
 
 #[tokio::main]
@@ -92,8 +60,16 @@ async fn main() {
     let conn =
         Database::connect("mysql://mariadb:mariadb@mariadb/p0sticcio_bot").await.expect("Database connection failed");
 
+    let tg_client1 = tgbot::api::Client::new(env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1"))
+        .expect("Error building Telegram client for BOT_TOKEN1");
+    let tg_client2 = tgbot::api::Client::new(env::var("BOT_TOKEN2").expect("Missing env var BOT_TOKEN2"))
+        .expect("Error building Telegram client for BOT_TOKEN2");
+
     let (global_tx, global_rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
+        let tg_client1 = &tg_client1;
+        let tg_client2 = &tg_client2;
+
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
@@ -101,34 +77,23 @@ async fn main() {
             .throttle(pool)
             .for_each_concurrent(None, |(user_id, msg): (u64, Bot)| async move {
                 for i in 0..10 {
-                    let res = CLIENT
-                        .post(msg.get_url())
-                        .header("Content-Type", "application/json")
-                        .json(&json!({
-                            "chat_id": user_id,
-                            "text": msg.get_msg(),
-                            "parse_mode": "HTML",
-                            "disable_web_page_preview": true
-                        }))
-                        .send()
+                    let client = match msg {
+                        Bot::Comm(_) => tg_client1,
+                        Bot::Portal(_) => tg_client2,
+                    };
+                    if let Err(err) = client
+                        .execute(
+                            SendMessage::new(user_id as i64, msg.get_msg())
+                                .with_parse_mode(ParseMode::Html)
+                                .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
+                        )
                         .await
-                        .map_err(|e| {
-                            error!("Telegram error on retry {}: {}\nuser_id: {}\nmessage: {:?}", i, e, user_id, msg)
-                        });
-                    if let Ok(res) = res {
-                        if res.status().is_success() {
-                            break;
-                        }
-
-                        error!(
-                            "Telegram error on retry {}: {:?}\nuser_id: {}\nmessage: {:?}",
-                            i,
-                            res.text().await,
-                            user_id,
-                            msg
-                        );
+                    {
+                        error!("Telegram error on retry {}: {}\nuser_id: {}\nmessage: {:?}", i, err, user_id, msg);
+                        time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        break;
                     }
-                    time::sleep(Duration::from_secs(1)).await;
                 }
             })
             .await;
@@ -159,9 +124,16 @@ async fn main() {
         })
         .collect::<HashMap<_, _>>();
 
-    let intel = Intel::new(&CLIENT, USERNAME.as_deref(), PASSWORD.as_deref());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .expect("Client build failed");
+    let username = env::var("USERNAME").ok();
+    let password = env::var("PASSWORD").ok();
+    let intel = Intel::new(&client, username.as_deref(), password.as_deref());
 
-    if let Some(cookies) = &*COOKIES {
+    if let Ok(cookies) = env::var("COOKIES") {
         intel
             .add_cookies(cookies.split("; ").filter_map(|cookie| {
                 let (pos, _) = cookie.match_indices('=').next()?;
@@ -271,7 +243,7 @@ enum PortalOrCoords {
 
 async fn comm_survey(
     config: &config::Config,
-    intel: &Intel<'static>,
+    intel: &Intel<'_>,
     senders: &Senders,
     portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
 ) {
@@ -360,11 +332,8 @@ async fn comm_survey(
     }
 }
 
-async fn portal_scanner<C>(
-    conn: &C,
-    intel: &Intel<'static>,
-    mut portal_rx: mpsc::UnboundedReceiver<(PortalOrCoords, i64)>,
-) where
+async fn portal_scanner<C>(conn: &C, intel: &Intel<'_>, mut portal_rx: mpsc::UnboundedReceiver<(PortalOrCoords, i64)>)
+where
     C: ConnectionTrait + TransactionTrait,
 {
     while let Some((poc, time)) = portal_rx.recv().await {
@@ -498,7 +467,7 @@ fn get_portal_max_energy_by_level(level: u8) -> u16 {
     }
 }
 
-async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders: &Senders) {
+async fn portal_survey(config: &config::Config, intel: &Intel<'_>, senders: &Senders) {
     let mut portals = HashMap::new();
     for zone in config.zones.iter() {
         for (id, filter) in &zone.users {
@@ -545,7 +514,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'static>, senders:
 async fn map_survey<C>(
     conn: &C,
     config: &config::Config,
-    intel: &Intel<'static>,
+    intel: &Intel<'_>,
     senders: &Senders,
     portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
 ) where
@@ -566,7 +535,7 @@ async fn map_survey<C>(
                     (from_lat, from_lng),
                     (to_lat, to_lng),
                     Some(15),
-                    Some(7),
+                    None,
                     None,
                     None,
                     (1, Duration::from_secs(1)),
@@ -655,13 +624,15 @@ async fn map_survey<C>(
                                 msgs.push(init.clone());
                                 slot += 1;
                             }
+                            msgs[slot].push('\n');
                             if distances[&faction].get(&(portal.lat, portal.lon))
                                 == Some(&(biggest_cluster[&faction], min_distance[&faction]))
                             {
-                                msgs[slot].push_str("\n> ");
+                                msgs[slot].push_str(symbols::EXPLOSION);
                             } else {
-                                msgs[slot].push_str("\n* ");
+                                msgs[slot].push_str(symbols::BULLET);
                             }
+                            msgs[slot].push(' ');
                             msgs[slot].push_str(&msg);
                             msgs
                         });
