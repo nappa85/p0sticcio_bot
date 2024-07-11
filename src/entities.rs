@@ -503,8 +503,12 @@ impl<'a> TryFrom<&'a Markup> for Player<'a> {
 
 impl<'a> std::fmt::Display for Player<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} <a href=\"https://link.ingress.com/?link=https%3A%2F%2Fintel.ingress.com%2Fagent%2F{name}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3A%2F%2Fapps.apple.com%2Fapp%2Fingress%2Fid576505181&ofl=https%3A%2F%2Fwww.ingress.com%2F\">{name}</a>", self.team, name=self.name)
+        write!(f, "{} {}", self.team, generate_player_link(self.name))
     }
+}
+
+pub fn generate_player_link(name: &str) -> String {
+    format!("[{name}](https://link.ingress.com/?link=https%3A%2F%2Fintel.ingress.com%2Fagent%2F{name}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3A%2F%2Fapps.apple.com%2Fapp%2Fingress%2Fid576505181&ofl=https%3A%2F%2Fwww.ingress.com%2F)")
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -523,7 +527,7 @@ impl<'a> Portal<'a> {
 
 impl<'a> std::fmt::Display for Portal<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> (<a href=\"https://maps.google.it/maps/?q={},{}\">{}</a>)", self.lat, self.lon, self.name, self.lat, self.lon, self.address)
+        write!(f, "[{name}](https://intel.ingress.com/intel?pll={lat},{lon}) ([{address}](https://maps.google.it/maps/?q={lat},{lon}))", lat=self.lat, lon=self.lon, name=self.name, address=self.address)
     }
 }
 

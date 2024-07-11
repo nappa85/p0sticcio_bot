@@ -2,6 +2,8 @@ use ingress_intel_rs::{entities, portal_details};
 use sea_orm::{entity::prelude::*, ActiveValue, QuerySelect, SelectColumns, TransactionTrait};
 use tracing::error;
 
+use crate::entities::Portal;
+
 use super::{portal_mods, portal_resonators, portal_revision};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -23,6 +25,15 @@ impl Model {
         conn: &C,
     ) -> Result<Option<portal_revision::Model>, DbErr> {
         portal_revision::Entity::find_by_id(self.latest_revision_id).one(conn).await
+    }
+
+    pub fn as_portal(&self) -> Portal<'_> {
+        Portal {
+            name: &self.title,
+            address: "maps",
+            lat: Decimal::from_f64_retain(self.latitude).expect("invalid latitude"),
+            lon: Decimal::from_f64_retain(self.longitude).expect("invalid longitude"),
+        }
     }
 }
 

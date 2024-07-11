@@ -8,19 +8,19 @@ use serde::Deserialize;
 
 use crate::entities::Plext;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Config {
     pub zones: Vec<Zone>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Zone {
     pub from: [u64; 2],
     pub to: [u64; 2],
     pub users: HashMap<u64, Filter>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Filter {
     #[serde(rename = "sendAll")]
     pub send_all: Option<bool>,

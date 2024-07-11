@@ -25,6 +25,7 @@ use tokio::{sync::mpsc, time};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
+mod command;
 mod config;
 mod database;
 mod dedup_flatten;
@@ -66,6 +67,8 @@ async fn main() {
         .expect("Error building Telegram client for BOT_TOKEN2");
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
+    let config2 = config.clone();
+    let conn2 = conn.clone();
     tokio::spawn(async move {
         let tg_client1 = &tg_client1;
         let tg_client2 = &tg_client2;
@@ -73,9 +76,9 @@ async fn main() {
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
         let pool = ThrottlePool::new(rate);
-        UnboundedReceiverStream::new(global_rx)
-            .throttle(pool)
-            .for_each_concurrent(None, |(user_id, msg): (u64, Bot)| async move {
+        let send_stream = UnboundedReceiverStream::new(global_rx).throttle(pool).for_each_concurrent(
+            None,
+            |(user_id, msg): (u64, Bot)| async move {
                 for i in 0..10 {
                     let client = match msg {
                         Bot::Comm(_) => tg_client1,
@@ -84,7 +87,7 @@ async fn main() {
                     if let Err(err) = client
                         .execute(
                             SendMessage::new(user_id as i64, msg.get_msg())
-                                .with_parse_mode(ParseMode::Html)
+                                .with_parse_mode(ParseMode::Markdown)
                                 .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
                         )
                         .await
@@ -95,8 +98,20 @@ async fn main() {
                         break;
                     }
                 }
-            })
-            .await;
+            },
+        );
+
+        tokio::select! {
+            _ = send_stream => {
+                error!("send stream terminated");
+            }
+            _ = command::manage(&conn2, &config2, tg_client1) => {
+                error!("Bot client1 terminated");
+            }
+            _ = command::manage(&conn2, &config2, tg_client2) => {
+                error!("Bot client2 terminated");
+            }
+        }
     });
 
     let senders = config
@@ -114,7 +129,9 @@ async fn main() {
                     UnboundedReceiverStream::new(rx)
                         .throttle(pool)
                         .for_each(|msg| {
-                            global_tx.send((id, msg)).map_err(|e| error!("Sender error: {}", e)).ok();
+                            if let Err(err) = global_tx.send((id, msg)) {
+                                error!("User {id} throttler sender error: {err}");
+                            }
                             future::ready(())
                         })
                         .await;
@@ -279,13 +296,15 @@ async fn comm_survey(
                                 .map_err(|_| error!("Unable to create {:?} from {:?}", msg_type, plext.plext))
                                 .ok()?;
                             if plext.should_scan() {
-                                let _ = portal_tx.send((
+                                if let Err(err) = portal_tx.send((
                                     PortalOrCoords::Coords {
                                         lat: plext.get_lat().unwrap(),
                                         lon: plext.get_lon().unwrap(),
                                     },
                                     *time,
-                                ));
+                                )) {
+                                    error!("Portal scan queue error: {err}");
+                                }
                             }
                             Some(plext)
                         })
@@ -307,10 +326,9 @@ async fn comm_survey(
                         if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
                             for (id, filter) in &zone.users {
                                 if filter.apply(msg) {
-                                    senders[id]
-                                        .send(Bot::Comm(msg.to_string()))
-                                        .map_err(|e| error!("Sender error: {}", e))
-                                        .ok();
+                                    if let Err(err) = senders[id].send(Bot::Comm(msg.to_string())) {
+                                        error!("Comm sender error: {err}");
+                                    }
                                 } else {
                                     debug!("Filtered message for user {}: {:?}", id, msg);
                                 }
@@ -355,9 +373,9 @@ where
                     .await
                     .map_err(|err| error!("Portal {id} scan error: {err}"))
                 {
-                    let _ = database::portal::update_or_insert(conn, &id, time, portal, res.result)
-                        .await
-                        .map_err(|err| error!("Portal {id} save error: {err}"));
+                    if let Err(err) = database::portal::update_or_insert(conn, &id, time, portal, res.result).await {
+                        error!("Portal {id} save error: {err}");
+                    }
                 }
                 // wait only if we have effectively tried to scan the portal
                 time::sleep(Duration::from_secs(10)).await;
@@ -415,11 +433,11 @@ impl PortalCache {
             None
         } else {
             Some(format!(
-                "{}Portal <a href=\"https://intel.ingress.com/intel?pll={},{}\">{}</a> lost:\n{}",
+                "{}Portal [{}](https://intel.ingress.com/intel?pll={},{}) lost:\n{}",
                 symbols::ALERT,
+                self.name,
                 self.coords.0,
                 self.coords.1,
-                self.name,
                 alarms.join("\n")
             ))
         }
@@ -490,10 +508,9 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'_>, senders: &Sen
                     if let Some(cached) = cache.get(portal_id) {
                         if let Some(msg) = cached.alarm(&new_cache) {
                             for user_id in users {
-                                senders[user_id]
-                                    .send(Bot::Portal(msg.clone()))
-                                    .map_err(|e| error!("Sender error: {}", e))
-                                    .ok();
+                                if let Err(err) = senders[user_id].send(Bot::Portal(msg.clone())) {
+                                    error!("Portal survey sender error: {err}");
+                                }
                             }
                         }
                     }
@@ -549,10 +566,12 @@ async fn map_survey<C>(
                     }
 
                     if database::portal::should_scan(conn, portal).await {
-                        let _ = portal_tx.send((
+                        if let Err(err) = portal_tx.send((
                             PortalOrCoords::Portal { id: portal.get_id().unwrap().to_owned() },
                             portal.get_timestamp().unwrap() as i64,
-                        ));
+                        )) {
+                            error!("Portal scan queue error: {err}");
+                        }
                     }
 
                     if let (Some(name), Some(level), Some(faction), Some(lat), Some(lon)) = (
@@ -620,7 +639,8 @@ async fn map_survey<C>(
                         let msgs = sublist.into_iter().fold(vec![init.clone()], |mut msgs, portal| {
                             let msg = portal.to_string();
                             let mut slot = msgs.len() - 1;
-                            if msgs[slot].len() + msg.len() + 3 > 4094 {
+                            // worst case scenarion ('\n' + symbols::EXPLOSION + ' ').len() = 6
+                            if msgs[slot].len() + msg.len() + 6 > 4094 {
                                 msgs.push(init.clone());
                                 slot += 1;
                             }
@@ -641,10 +661,9 @@ async fn map_survey<C>(
                         for (id, conf) in &zone.users {
                             if conf.resume.unwrap_or_default() {
                                 for msg in &msgs {
-                                    senders[id]
-                                        .send(Bot::Portal(msg.clone()))
-                                        .map_err(|e| error!("Sender error: {}", e))
-                                        .ok();
+                                    if let Err(err) = senders[id].send(Bot::Portal(msg.clone())) {
+                                        error!("Map survey sender error: {err}");
+                                    }
                                 }
                             }
                         }
