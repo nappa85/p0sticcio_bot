@@ -39,4 +39,9 @@ CREATE TABLE portal_resonators (
     reso_energy INTEGER NOT NULL
 );
 CREATE INDEX portal_resonator_id ON portal_resonators (revision_id);
+CREATE TABLE locations (
+    user_id BIGINT PRIMARY KEY,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL
+);
 COMMIT;

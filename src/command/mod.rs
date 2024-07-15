@@ -3,7 +3,10 @@ use std::time::Duration;
 use sea_orm::{ConnectionTrait, DbErr, StreamTrait};
 use tgbot::{
     api::{Client, ExecuteError},
-    types::{ChatPeerId, GetUpdates, Message, MessageData, ParseMode, ReplyParameters, SendMessage, Text, UpdateType},
+    types::{
+        ChatPeerId, GetUpdates, Message, MessageData, ParseMode, ReplyParameters, SendMessage, Text, UpdateType,
+        UserPeerId,
+    },
 };
 use tokio::time::sleep;
 use tracing::{debug, error};
@@ -11,6 +14,7 @@ use tracing::{debug, error};
 use crate::config::Config;
 
 mod help;
+mod location;
 mod portals;
 
 #[derive(Debug, thiserror::Error)]
@@ -46,14 +50,25 @@ where
             let Some(user) = update.get_user() else {
                 continue;
             };
+            let user_id = user.id;
             if !config.zones.iter().any(|zone| zone.users.contains_key(&(i64::from(user.id) as u64))) {
                 continue;
             }
 
-            if let UpdateType::Message(Message { id, data: MessageData::Text(ref msg), .. }) = update.update_type {
-                // here we don't retry because it also parses the input
-                if let Err(err) = parse_message(client, conn, chat_id, id, msg).await {
-                    error!("{err}\nuser_id: {chat_id}\nmessage: {msg:?}");
+            if let UpdateType::Message(Message { id, ref data, .. }) = update.update_type {
+                match data {
+                    MessageData::Text(msg) => {
+                        // here we don't retry because it also parses the input
+                        if let Err(err) = parse_message(client, conn, chat_id, user_id, id, msg).await {
+                            error!("{err}\nuser_id: {user_id}\nmessage: {msg:?}");
+                        }
+                    }
+                    MessageData::Location(location) => {
+                        if let Err(err) = location::set(conn, user_id, location.latitude, location.longitude).await {
+                            error!("{err}\nuser_id: {user_id}");
+                        }
+                    }
+                    _ => {}
                 }
             } else {
                 debug!("Ignoring update {update:?}");
@@ -63,10 +78,11 @@ where
     }
 }
 
-pub async fn parse_message<C>(
+async fn parse_message<C>(
     client: &Client,
     conn: &C,
     chat_id: ChatPeerId,
+    user_id: UserPeerId,
     message_id: i64,
     msg: &Text,
 ) -> Result<(), Error>
@@ -78,8 +94,7 @@ where
     let mut iter = msg.split_whitespace();
     let res = match iter.next().map(|msg| msg.split_once('@').map(|(pre, _post)| pre).unwrap_or(msg)) {
         Some("/help") => help::execute(client, message_id, chat_id).await,
-        Some("/owner") => portals::execute(conn, client, message_id, chat_id, iter, true).await,
-        Some("/portals") => portals::execute(conn, client, message_id, chat_id, iter, false).await,
+        Some("/portals") => portals::execute(conn, client, message_id, chat_id, user_id, iter).await,
         _ => return Ok(()),
     };
 
