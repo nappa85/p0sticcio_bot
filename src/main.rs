@@ -18,7 +18,7 @@ use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
     Decimal,
 };
-use sea_orm::{ConnectionTrait, Database, TransactionTrait};
+use sea_orm::{ColumnTrait, ConnectionTrait, Database, EntityTrait, QueryFilter, TransactionTrait};
 use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
 use tgbot::types::{LinkPreviewOptions, ParseMode, SendMessage};
 use tokio::{sync::mpsc, time};
@@ -193,11 +193,24 @@ async fn get_portal_details_with_retry(
     unreachable!()
 }
 
-async fn get_entities_around_with_retry(
+async fn get_entities_around_with_retry<C>(
+    conn: &C,
     intel: &Intel<'_>,
     lat: f64,
     lon: f64,
-) -> Result<Option<String>, ingress_intel_rs::Error> {
+) -> Result<Option<String>, ()>
+where
+    C: ConnectionTrait + TransactionTrait,
+{
+    if let Some(portal) = database::portal::Entity::find()
+        .filter(database::portal::Column::Latitude.eq(lat).and(database::portal::Column::Longitude.eq(lon)))
+        .one(conn)
+        .await
+        .map_err(|err| error!("Portal retrieve error: {err}"))?
+    {
+        return Ok(Some(portal.portal_id));
+    }
+
     for i in 1..11 {
         let res = match intel.get_entities_around(lat, lon, Some(15), None, None, None).await {
             Ok(res) => res,
@@ -357,7 +370,7 @@ where
     while let Some((poc, time)) = portal_rx.recv().await {
         let id = match poc {
             PortalOrCoords::Portal { id } => id,
-            PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(intel, lat, lon).await {
+            PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(conn, intel, lat, lon).await {
                 Ok(Some(id)) => id,
                 _ => continue,
             },
