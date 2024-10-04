@@ -314,19 +314,19 @@ fn parser() -> impl Parser<char, Vec<Expr>, Error = Simple<char>> {
     let var = text::int(10).padded().from_str().unwrapped().map(Var::Num).or(string.map(Var::String)).labelled("var");
 
     let expr = recursive(|expr| {
-        let eq = ident.then_ignore(just('=')).then(var).map(Expr::Eq).labelled("eq");
+        let eq = ident.then_ignore(just('=').padded()).then(var).map(Expr::Eq).labelled("eq");
 
-        let ne = ident.then_ignore(just("<>")).then(var).map(Expr::Ne).labelled("ne");
+        let ne = ident.then_ignore(just("<>").padded()).then(var).map(Expr::Ne).labelled("ne");
 
-        let like = ident.then_ignore(just('~')).then(string).map(Expr::Like).labelled("like");
+        let like = ident.then_ignore(just('~').padded()).then(string).map(Expr::Like).labelled("like");
 
-        let gt = ident.then_ignore(just('>')).then(var).map(Expr::Gt).labelled("gt");
+        let gt = ident.then_ignore(just('>').padded()).then(var).map(Expr::Gt).labelled("gt");
 
-        let gte = ident.then_ignore(just(">=")).then(var).map(Expr::Gte).labelled("gte");
+        let gte = ident.then_ignore(just(">=").padded()).then(var).map(Expr::Gte).labelled("gte");
 
-        let lt = ident.then_ignore(just('<')).then(var).map(Expr::Lt).labelled("lt");
+        let lt = ident.then_ignore(just('<').padded()).then(var).map(Expr::Lt).labelled("lt");
 
-        let lte = ident.then_ignore(just("<=")).then(var).map(Expr::Lte).labelled("lte");
+        let lte = ident.then_ignore(just("<=").padded()).then(var).map(Expr::Lte).labelled("lte");
 
         let or = just("or")
             .padded()
@@ -356,4 +356,18 @@ fn parser() -> impl Parser<char, Vec<Expr>, Error = Simple<char>> {
     });
 
     expr.then_ignore(end())
+}
+
+#[cfg(test)]
+mod tests {
+    use chumsky::Parser;
+
+    #[test]
+    fn it_works() {
+        match super::parser().parse_recovery("mod_name = \"Ito En Transmuter (-)\"") {
+            (_, errs) if !errs.is_empty() => panic!("{errs:?}"),
+            (Some(_), _) => {}
+            (None, _) => panic!("No output generated from given query"),
+        };
+    }
 }
