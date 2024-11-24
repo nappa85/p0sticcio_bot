@@ -209,6 +209,8 @@ where
         .map_err(|err| error!("Portal retrieve error: {err}"))?
     {
         return Ok(Some(portal.portal_id));
+    } else {
+        warn!("Can't find portal on coordinates {lat},{lon} on database, fallback to requesting");
     }
 
     for i in 1..11 {
