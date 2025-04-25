@@ -80,7 +80,8 @@ where
     let has_mod = filters.iter().any(|filter| filter.find_op_field(|field| field.starts_with("mod_")));
     let has_reso = filters.iter().any(|filter| filter.find_op_field(|field| field.starts_with("reso_")));
 
-    let Some((where_clause, params)) = Expr::And(filters).get_where() else {
+    let mut index = 0;
+    let Some((where_clause, params)) = Expr::And(filters).get_where(&mut index) else {
         return Err(String::from("No valid parameters given"));
     };
 
@@ -102,8 +103,12 @@ inner join portal_revisions pr on pr.id = p.latest_revision_id
 {older_join}
 where {where_clause}
 group by p.id order by {sort}{limit}",
-        older_select =
-            if sort.is_older() { ", (unix_timestamp() * 1000 - first.timestamp) / 86400000.0 days" } else { "" },
+        older_select = if sort.is_older() {
+            //", (unix_timestamp() * 1000 - first.timestamp) / 86400000.0 days"
+            ", (extract(epoch from now() at time zone 'utc' at time zone 'utc') * 1000 - first.timestamp) / 86400000.0 days"
+        } else {
+            ""
+        },
         position_select = if let Some((lat, lon)) = position {
             format!(", sqrt(power(abs({lat} - p.latitude), 2) + power(abs({lon} - p.longitude), 2)) distance")
         } else {
@@ -143,7 +148,7 @@ where
     let query = filters.collect::<Vec<_>>().join(" ");
     let messages = match query_and_values(conn, i64::from(user_id), &query).await {
         Ok((query, params)) => {
-            let stmt = Statement::from_sql_and_values(conn.get_database_backend(), query, params);
+            let stmt = Statement::from_sql_and_values(conn.get_database_backend(), query.clone(), params);
             match conn.stream(stmt).await {
                 Ok(stream) => {
                     stream
@@ -165,13 +170,14 @@ where
 
                             future::ready(Ok(messages))
                         })
-                        .await?
+                        .await
+                        .map_err(|err| Error::Query(err, query))?
                 }
-                Err(err) => vec![err.to_string()],
+                Err(err) => vec![format!("Execution error: {err}, query was {query}")],
             }
         }
         Err(err) => {
-            vec![err.to_string()]
+            vec![format!("Parse error: {err}")]
         }
     };
 
@@ -240,18 +246,39 @@ impl Expr {
         }
     }
 
-    fn get_where(self) -> Option<(String, Vec<Value>)> {
+    fn get_where(self, index: &mut u8) -> Option<(String, Vec<Value>)> {
         match self {
-            Self::Eq((k, v)) => Some((format!("{k} = ?"), vec![v.into_value()])),
-            Self::Ne((k, v)) => Some((format!("{k} <> ?"), vec![v.into_value()])),
-            Self::Like((k, v)) => Some((format!("{k} like ?"), vec![Value::from(v)])),
-            Self::Gt((k, v)) => Some((format!("{k} > ?"), vec![v.into_value()])),
-            Self::Gte((k, v)) => Some((format!("{k} >= ?"), vec![v.into_value()])),
-            Self::Lt((k, v)) => Some((format!("{k} < ?"), vec![v.into_value()])),
-            Self::Lte((k, v)) => Some((format!("{k} <= ?"), vec![v.into_value()])),
+            Self::Eq((k, v)) => {
+                *index += 1;
+                Some((format!("{k} = ${index}"), vec![v.into_value()]))
+            }
+            Self::Ne((k, v)) => {
+                *index += 1;
+                Some((format!("{k} <> ${index}"), vec![v.into_value()]))
+            }
+            Self::Like((k, v)) => {
+                *index += 1;
+                Some((format!("{k} like ${index}"), vec![Value::from(v)]))
+            }
+            Self::Gt((k, v)) => {
+                *index += 1;
+                Some((format!("{k} > ${index}"), vec![v.into_value()]))
+            }
+            Self::Gte((k, v)) => {
+                *index += 1;
+                Some((format!("{k} >= ${index}"), vec![v.into_value()]))
+            }
+            Self::Lt((k, v)) => {
+                *index += 1;
+                Some((format!("{k} < ${index}"), vec![v.into_value()]))
+            }
+            Self::Lte((k, v)) => {
+                *index += 1;
+                Some((format!("{k} <= ${index}"), vec![v.into_value()]))
+            }
             Self::Or(e) => e
                 .into_iter()
-                .filter_map(Expr::get_where)
+                .filter_map(|expr| expr.get_where(index))
                 .fold(None, |acc: Option<(String, Vec<Value>)>, (r#where, params)| {
                     if let Some(mut acc) = acc {
                         acc.0.push_str(" or ");
@@ -265,7 +292,7 @@ impl Expr {
                 .map(|(s, params)| (format!("({s})"), params)),
             Self::And(e) => e
                 .into_iter()
-                .filter_map(Expr::get_where)
+                .filter_map(|expr| expr.get_where(index))
                 .fold(None, |acc: Option<(String, Vec<Value>)>, (r#where, params)| {
                     if let Some(mut acc) = acc {
                         acc.0.push_str(" and ");

@@ -1,5 +1,5 @@
 use ingress_intel_rs::{entities, portal_details};
-use sea_orm::{entity::prelude::*, ActiveValue, QuerySelect, SelectColumns, TransactionTrait};
+use sea_orm::{ActiveValue, QuerySelect, SelectColumns, TransactionTrait, entity::prelude::*};
 use tracing::error;
 
 use crate::entities::Portal;
@@ -176,9 +176,9 @@ pub async fn update_or_insert<C: TransactionTrait>(
         revision: ActiveValue::Set(old_model.as_ref().map(|model| model.revision + 1).unwrap_or_default()),
         timestamp: ActiveValue::Set(timestamp),
         faction: ActiveValue::Set(portal_revision::Faction::from(portal.get_faction().expect("missing faction"))),
-        level: ActiveValue::Set(i32::from(portal.get_level())),
-        health: ActiveValue::Set(i32::from(portal.get_health())),
-        res_count: ActiveValue::Set(i32::from(portal.get_res_count())),
+        level: ActiveValue::Set(i64::from(portal.get_level())),
+        health: ActiveValue::Set(i64::from(portal.get_health())),
+        res_count: ActiveValue::Set(i64::from(portal.get_res_count())),
         owner: ActiveValue::Set(portal.get_owner().map(ToOwned::to_owned)),
         ..Default::default()
     }
@@ -209,8 +209,8 @@ pub async fn update_or_insert<C: TransactionTrait>(
         portal_resonators::ActiveModel {
             revision_id: ActiveValue::Set(revision_model.id),
             reso_owner: ActiveValue::Set(reso.get_owner().to_owned()),
-            reso_level: ActiveValue::Set(i32::from(reso.get_level())),
-            reso_energy: ActiveValue::Set(i32::from(reso.get_energy())),
+            reso_level: ActiveValue::Set(i64::from(reso.get_level())),
+            reso_energy: ActiveValue::Set(i64::from(reso.get_energy())),
             ..Default::default()
         }
         .insert(&txn)

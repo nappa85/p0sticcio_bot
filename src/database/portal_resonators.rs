@@ -7,8 +7,8 @@ pub struct Model {
     pub id: i64,
     pub revision_id: i64,
     pub reso_owner: String,
-    pub reso_level: i32,
-    pub reso_energy: i32,
+    pub reso_level: i64,
+    pub reso_energy: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

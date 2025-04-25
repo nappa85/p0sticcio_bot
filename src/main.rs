@@ -58,8 +58,9 @@ async fn main() {
 
     let config = config::get().await.expect("Config read failed");
 
-    let conn =
-        Database::connect("mysql://mariadb:mariadb@mariadb/p0sticcio_bot").await.expect("Database connection failed");
+    let conn = Database::connect("postgres://postgres:postgres@postgres/p0sticcio_bot")
+        .await
+        .expect("Database connection failed");
 
     let tg_client1 = tgbot::api::Client::new(env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1"))
         .expect("Error building Telegram client for BOT_TOKEN1");
@@ -418,7 +419,7 @@ impl From<IntelPortal> for PortalCache {
 }
 
 impl PortalCache {
-    fn alarm(&self, other: &Self) -> Option<String> {
+    fn alarm(&self, portal_id: &str, other: &Self) -> Option<String> {
         let mut alarms = Vec::new();
 
         let old = self.get_mods_count();
@@ -448,9 +449,10 @@ impl PortalCache {
             None
         } else {
             Some(format!(
-                "{}Portal [{}](https://intel.ingress.com/intel?pll={},{}) lost:\n{}",
+                "{}Portal [{}](https://link.ingress.com/?link=https%3a%2f%2fintel.ingress.com%2fportal%2f{}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3a%2f%2fapps.apple.com%2fapp%2fingress%2fid576505181&ofl=https%3a%2f%2fintel.ingress.com%2fintel%3fpll%3d{}%2c{}) lost:\n{}",
                 symbols::ALERT,
                 self.name,
+                portal_id,
                 self.coords.0,
                 self.coords.1,
                 alarms.join("\n")
@@ -521,7 +523,7 @@ async fn portal_survey(config: &config::Config, intel: &Intel<'_>, senders: &Sen
                 Ok(res) => {
                     let new_cache = PortalCache::from(res.result);
                     if let Some(cached) = cache.get(portal_id) {
-                        if let Some(msg) = cached.alarm(&new_cache) {
+                        if let Some(msg) = cached.alarm(portal_id, &new_cache) {
                             for user_id in users {
                                 if let Err(err) = senders[user_id].send(Bot::Portal(msg.clone())) {
                                     error!("Portal survey sender error: {err}");

@@ -12,9 +12,9 @@ pub struct Model {
     pub revision: i64,
     pub timestamp: i64,
     pub faction: Faction,
-    pub level: i32,
-    pub health: i32,
-    pub res_count: i32,
+    pub level: i64,
+    pub health: i64,
+    pub res_count: i64,
     pub owner: Option<String>,
 }
 

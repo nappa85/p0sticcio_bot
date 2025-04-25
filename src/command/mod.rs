@@ -23,6 +23,8 @@ pub enum Error {
     Telegram(#[from] ExecuteError),
     #[error("Database error: {0}")]
     Database(#[from] DbErr),
+    #[error("Database error: {0} query was {1}")]
+    Query(DbErr, String),
 }
 
 pub async fn manage<C>(conn: &C, config: &Config, client: &Client)
