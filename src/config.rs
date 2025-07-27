@@ -2,25 +2,38 @@ use std::collections::HashMap;
 
 // use rust_decimal::Decimal;
 
+use rust_decimal::Decimal;
 use tokio::{fs::File, io::AsyncReadExt};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::entities::Plext;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub zones: Vec<Zone>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Zone {
     pub from: [u64; 2],
     pub to: [u64; 2],
     pub users: HashMap<u64, Filter>,
+    #[serde(deserialize_with = "deserialize_anchors")]
+    pub anchors: Option<HashMap<String, (Decimal, Decimal)>>,
 }
 
-#[derive(Clone, Deserialize)]
+fn deserialize_anchors<'de, D>(deserializer: D) -> Result<Option<HashMap<String, (Decimal, Decimal)>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let temp = Option::<HashMap<String, [i64; 2]>>::deserialize(deserializer)?;
+    Ok(temp.map(|t| {
+        t.into_iter().map(|(name, coords)| (name, (Decimal::new(coords[0], 6), Decimal::new(coords[1], 6)))).collect()
+    }))
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Filter {
     #[serde(rename = "sendAll")]
     pub send_all: Option<bool>,
