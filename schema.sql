@@ -2,7 +2,7 @@ BEGIN;
 CREATE DATABASE p0sticcio_bot;
 USE p0sticcio_bot;
 CREATE TABLE portals (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     portal_id VARCHAR(40) NOT NULL,
     latest_revision_id BIGINT NOT NULL,
     latitude REAL NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE portals (
 );
 CREATE INDEX portal_id ON portals (portal_id);
 CREATE TABLE portal_revisions (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     portal_id BIGINT NOT NULL,
     revision BIGINT NOT NULL,
     timestamp BIGINT NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE portal_revisions (
 );
 CREATE INDEX portal_mod_id ON portal_revisions (portal_id, revision);
 CREATE TABLE portal_mods (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     revision_id BIGINT NOT NULL,
     mod_owner VARCHAR(255) NOT NULL,
     mod_name VARCHAR(255) NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE portal_mods (
 );
 CREATE INDEX portal_mod_id ON portal_mods (revision_id);
 CREATE TABLE portal_resonators (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     revision_id BIGINT NOT NULL,
     reso_owner VARCHAR(255) NOT NULL,
     reso_level INTEGER NOT NULL,
