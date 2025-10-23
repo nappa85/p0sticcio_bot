@@ -1,4 +1,4 @@
-use ingress_intel_rs::{entities, portal_details};
+use ingress_intel_rs::entities;
 use sea_orm::{ActiveValue, QuerySelect, SelectColumns, TransactionTrait, entity::prelude::*};
 use tracing::error;
 
@@ -20,20 +20,15 @@ pub struct Model {
 }
 
 impl Model {
-    pub async fn get_latest_revision<C: ConnectionTrait>(
-        &self,
-        conn: &C,
-    ) -> Result<Option<portal_revision::Model>, DbErr> {
-        portal_revision::Entity::find_by_id(self.latest_revision_id).one(conn).await
-    }
+    // pub async fn get_latest_revision<C: ConnectionTrait>(
+    //     &self,
+    //     conn: &C,
+    // ) -> Result<Option<portal_revision::Model>, DbErr> {
+    //     portal_revision::Entity::find_by_id(self.latest_revision_id).one(conn).await
+    // }
 
-    pub fn as_portal(&self) -> Portal<'_> {
-        Portal {
-            name: &self.title,
-            address: "maps",
-            lat: Decimal::from_f64_retain(self.latitude).expect("invalid latitude"),
-            lon: Decimal::from_f64_retain(self.longitude).expect("invalid longitude"),
-        }
+    pub fn as_portal(&self) -> Portal<&'_ str> {
+        Portal { name: &self.title, address: "maps", lat: self.latitude, lon: self.longitude }
     }
 }
 
@@ -62,42 +57,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelEntity) -> bool {
-    let Some(id) = portal.get_id() else {
-        error!("Portal without id {portal:?}");
-        return false;
-    };
-    let Some(faction) = portal.get_faction() else {
-        error!("Portal without faction {portal:?}");
-        return false;
-    };
-    // let Some(latitude) = portal.get_latitude() else {
-    //     error!("Portal without latitude {portal:?}");
-    //     return false;
-    // };
-    // let Some(longitude) = portal.get_longitude() else {
-    //     error!("Portal without longitude {portal:?}");
-    //     return false;
-    // };
-    let Some(level) = portal.get_level() else {
-        error!("Portal without level {portal:?}");
-        return false;
-    };
-    let Some(health) = portal.get_health() else {
-        error!("Portal without health {portal:?}");
-        return false;
-    };
-    let Some(res_count) = portal.get_res_count() else {
-        error!("Portal without resCount {portal:?}");
-        return false;
-    };
-    // let image = portal.get_image();
-    // let Some(title) = portal.get_name() else {
-    //     error!("Portal without title {portal:?}");
-    //     return false;
-    // };
-    // let owner = portal.get_owner();
-
+pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::Entity<entities::IntelPortal>) -> bool {
     // at this point we don't care if the portal has been moved or renamed
     let portal_revision::Model {
         id: _,
@@ -109,7 +69,7 @@ pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelE
         health: old_health,
         res_count: old_res_count,
         owner: _,
-    } = match Entity::get_latest_revision(conn, id).await {
+    } = match Entity::get_latest_revision(conn, &portal.id).await {
         Ok(Some(model)) => model,
         Ok(None) => return true,
         Err(err) => {
@@ -118,10 +78,10 @@ pub async fn should_scan<C: ConnectionTrait>(conn: &C, portal: &entities::IntelE
         }
     };
 
-    portal_revision::Faction::from(faction) != old_faction
-        || level != old_level as u8
-        || health != old_health as u8
-        || res_count != old_res_count as u8
+    portal_revision::Faction::from(portal.entity.faction) != old_faction
+        || portal.entity.level != old_level as u8
+        || portal.entity.health != old_health as u8
+        || portal.entity.res_count != old_res_count as u8
 }
 
 pub async fn update_or_insert<C: TransactionTrait>(
@@ -129,7 +89,7 @@ pub async fn update_or_insert<C: TransactionTrait>(
     id: &str,
     timestamp: i64,
     old_model: Option<portal_revision::Model>,
-    portal: portal_details::IntelPortal,
+    portal: entities::IntelPortal,
 ) -> Result<(), DbErr> {
     let txn = conn.begin().await?;
 
@@ -138,19 +98,19 @@ pub async fn update_or_insert<C: TransactionTrait>(
             return Err(DbErr::RecordNotFound(format!("Can't find portal with id {}", old_model.portal_id)));
         };
 
-        if portal_model.latitude != portal.get_latitude()
-            || portal_model.longitude != portal.get_longitude()
-            || portal_model.image.as_deref() != portal.get_image()
-            || portal_model.title != portal.get_title()
+        if portal_model.latitude != portal.latitude
+            || portal_model.longitude != portal.longitude
+            || portal_model.image.as_deref() != portal.image.as_deref()
+            || portal_model.title != portal.title
         {
             ActiveModel {
                 id: ActiveValue::Set(portal_model.id),
                 portal_id: ActiveValue::Set(id.to_owned()),
                 latest_revision_id: ActiveValue::Set(portal_model.latest_revision_id),
-                latitude: ActiveValue::Set(portal.get_latitude()),
-                longitude: ActiveValue::Set(portal.get_longitude()),
-                image: ActiveValue::Set(portal.get_image().map(ToOwned::to_owned)),
-                title: ActiveValue::Set(portal.get_title().to_owned()),
+                latitude: ActiveValue::Set(portal.latitude),
+                longitude: ActiveValue::Set(portal.longitude),
+                image: ActiveValue::Set(portal.image.as_ref().map(ToString::to_string)),
+                title: ActiveValue::Set(portal.title.to_string()),
             }
             .update(&txn)
             .await?
@@ -161,10 +121,10 @@ pub async fn update_or_insert<C: TransactionTrait>(
         ActiveModel {
             portal_id: ActiveValue::Set(id.to_owned()),
             latest_revision_id: ActiveValue::Set(0),
-            latitude: ActiveValue::Set(portal.get_latitude()),
-            longitude: ActiveValue::Set(portal.get_longitude()),
-            image: ActiveValue::Set(portal.get_image().map(ToOwned::to_owned)),
-            title: ActiveValue::Set(portal.get_title().to_owned()),
+            latitude: ActiveValue::Set(portal.latitude),
+            longitude: ActiveValue::Set(portal.longitude),
+            image: ActiveValue::Set(portal.image.as_ref().map(ToString::to_string)),
+            title: ActiveValue::Set(portal.title.to_string()),
             ..Default::default()
         }
         .insert(&txn)
@@ -175,11 +135,11 @@ pub async fn update_or_insert<C: TransactionTrait>(
         portal_id: ActiveValue::Set(portal_model.id),
         revision: ActiveValue::Set(old_model.as_ref().map(|model| model.revision + 1).unwrap_or_default()),
         timestamp: ActiveValue::Set(timestamp),
-        faction: ActiveValue::Set(portal_revision::Faction::from(portal.get_faction().expect("missing faction"))),
-        level: ActiveValue::Set(i64::from(portal.get_level())),
-        health: ActiveValue::Set(i64::from(portal.get_health())),
-        res_count: ActiveValue::Set(i64::from(portal.get_res_count())),
-        owner: ActiveValue::Set(portal.get_owner().map(ToOwned::to_owned)),
+        faction: ActiveValue::Set(portal_revision::Faction::from(portal.faction)),
+        level: ActiveValue::Set(i64::from(portal.level)),
+        health: ActiveValue::Set(i64::from(portal.health)),
+        res_count: ActiveValue::Set(i64::from(portal.res_count)),
+        owner: ActiveValue::Set(portal.owner.as_ref().map(ToString::to_string)),
         ..Default::default()
     }
     .insert(&txn)
@@ -193,24 +153,24 @@ pub async fn update_or_insert<C: TransactionTrait>(
     .update(&txn)
     .await?;
 
-    for r#mod in portal.get_mods().iter().flatten() {
+    for r#mod in portal.mods.iter().flatten().flatten() {
         portal_mods::ActiveModel {
             revision_id: ActiveValue::Set(revision_model.id),
-            mod_owner: ActiveValue::Set(r#mod.get_owner().to_owned()),
-            mod_name: ActiveValue::Set(r#mod.get_name().to_owned()),
-            mod_rarity: ActiveValue::Set(r#mod.get_rarity().to_owned()),
+            mod_owner: ActiveValue::Set(r#mod.owner.to_string()),
+            mod_name: ActiveValue::Set(r#mod.name.to_string()),
+            mod_rarity: ActiveValue::Set(r#mod.rarity.to_string()),
             ..Default::default()
         }
         .insert(&txn)
         .await?;
     }
 
-    for reso in portal.get_resonators().iter().flatten() {
+    for reso in portal.resonators.iter().flatten() {
         portal_resonators::ActiveModel {
             revision_id: ActiveValue::Set(revision_model.id),
-            reso_owner: ActiveValue::Set(reso.get_owner().to_owned()),
-            reso_level: ActiveValue::Set(i64::from(reso.get_level())),
-            reso_energy: ActiveValue::Set(i64::from(reso.get_energy())),
+            reso_owner: ActiveValue::Set(reso.owner.to_string()),
+            reso_level: ActiveValue::Set(i64::from(reso.level)),
+            reso_energy: ActiveValue::Set(i64::from(reso.energy)),
             ..Default::default()
         }
         .insert(&txn)

@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    hash::Hash,
+    pin::pin,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -7,17 +9,14 @@ use std::{
 use chrono::Utc;
 use ingress_intel_rs::{
     Intel,
-    entities::IntelResult,
+    entities::{IntelMod, IntelPortal, IntelResonator, IntelResult},
     plexts::Tab,
-    portal_details::{IntelMod, IntelPortal, IntelResonator},
 };
 use lru_time_cache::LruCache;
-use rust_decimal::{
-    Decimal,
-    prelude::{FromPrimitive, ToPrimitive},
-};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, TransactionTrait};
+use smol_str::{SmolStr, ToSmolStr};
 use tokio::{sync::mpsc, time};
+use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 pub mod command;
@@ -69,7 +68,7 @@ async fn get_entities_around_with_retry<C>(
     intel: &Intel<'_>,
     lat: f64,
     lon: f64,
-) -> Result<Option<String>, ()>
+) -> Result<Option<SmolStr>, ()>
 where
     C: ConnectionTrait + TransactionTrait,
 {
@@ -79,7 +78,7 @@ where
         .await
         .map_err(|err| error!("Portal retrieve error: {err}"))?
     {
-        return Ok(Some(portal.portal_id));
+        return Ok(Some(portal.portal_id.to_smolstr()));
     } else {
         warn!("Can't find portal on coordinates {lat},{lon} on database, fallback to requesting");
     }
@@ -101,16 +100,15 @@ where
                 IntelResult::Error(_) => &[],
                 IntelResult::Entities(e) => e.entities.as_slice(),
             })
-            .find_map(|entity| {
-                if entity.get_latitude().is_some_and(|l| (lat - l).abs() < 0.000001)
-                    && entity.get_longitude().is_some_and(|l| (lon - l).abs() < 0.000001)
-                {
-                    entity.get_id()
+            .filter_map(|entity| entity.as_portal())
+            .find_map(|portal| {
+                if (lat - portal.entity.latitude).abs() < 0.000001 && (lon - portal.entity.longitude).abs() < 0.000001 {
+                    Some(portal.id.as_str())
                 } else {
                     None
                 }
             }) {
-            Some(id) => return Ok(Some(id.to_owned())),
+            Some(id) => return Ok(Some(id.to_smolstr())),
             None => {
                 warn!(
                     "Can't find portal on coordinates {lat},{lon} retry {i} between {:?}",
@@ -122,11 +120,11 @@ where
                             IntelResult::Entities(e) => Ok(e
                                 .entities
                                 .into_iter()
-                                .filter_map(|entity| entity
-                                    .get_id()
-                                    .map(ToOwned::to_owned)
-                                    .zip(entity.get_latitude())
-                                    .zip(entity.get_longitude()))
+                                .filter_map(|entity| entity.into_portal().map(|portal| (
+                                    portal.id,
+                                    portal.entity.latitude,
+                                    portal.entity.longitude
+                                )))
                                 .collect::<Vec<_>>()),
                         })
                         .collect::<Vec<_>>()
@@ -140,7 +138,7 @@ where
 
 #[derive(Debug)]
 pub enum PortalOrCoords {
-    Portal { id: String },
+    Portal { id: SmolStr },
     Coords { lat: f64, lon: f64 },
 }
 
@@ -151,7 +149,7 @@ pub async fn comm_survey(
     portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
 ) {
     let mut interval = time::interval(Duration::from_secs(30)); // main comm interval
-    let mut sent_cache: Vec<LruCache<String, ()>> =
+    let mut sent_cache: Vec<LruCache<SmolStr, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
     loop {
         for (index, zone) in config.zones.iter().enumerate() {
@@ -181,16 +179,16 @@ pub async fn comm_survey(
                             let plext = entities::Plext::try_from((msg_type, &plext.plext, *time))
                                 .map_err(|_| error!("Unable to create {:?} from {:?}", msg_type, plext.plext))
                                 .ok()?;
-                            if plext.should_scan() {
-                                if let Err(err) = portal_tx.send((
+                            if plext.should_scan()
+                                && let Err(err) = portal_tx.send((
                                     PortalOrCoords::Coords {
                                         lat: plext.get_lat().unwrap(),
                                         lon: plext.get_lon().unwrap(),
                                     },
                                     *time,
-                                )) {
-                                    error!("Portal scan queue error: {err}");
-                                }
+                                ))
+                            {
+                                error!("Portal scan queue error: {err}");
                             }
                             Some(plext)
                         })
@@ -209,7 +207,7 @@ pub async fn comm_survey(
                     }
 
                     for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
-                        if sent_cache[index].notify_insert(msg.to_string(), ()).0.is_none() {
+                        if sent_cache[index].notify_insert(msg.to_smolstr(), ()).0.is_none() {
                             for (id, filter) in &zone.users {
                                 if filter.apply(msg) {
                                     if let Err(err) = senders[id].send(Bot::Comm(msg.to_string())) {
@@ -261,10 +259,9 @@ pub async fn portal_scanner<C>(
                 if let Ok(res) = get_portal_details_with_retry(intel, &id)
                     .await
                     .map_err(|err| error!("Portal {id} scan error: {err}"))
+                    && let Err(err) = database::portal::update_or_insert(conn, &id, time, portal, res.result).await
                 {
-                    if let Err(err) = database::portal::update_or_insert(conn, &id, time, portal, res.result).await {
-                        error!("Portal {id} save error: {err}");
-                    }
+                    error!("Portal {id} save error: {err}");
                 }
                 // wait only if we have effectively tried to scan the portal
                 time::sleep(Duration::from_secs(10)).await;
@@ -274,19 +271,19 @@ pub async fn portal_scanner<C>(
 }
 
 struct PortalCache {
-    name: String,
+    name: SmolStr,
     coords: (f64, f64),
     mods: Vec<Option<IntelMod>>,
-    resonators: Vec<Option<IntelResonator>>,
+    resonators: Vec<IntelResonator>,
 }
 
 impl From<IntelPortal> for PortalCache {
     fn from(p: IntelPortal) -> Self {
         PortalCache {
-            name: p.get_title().to_owned(),
-            coords: (p.get_latitude(), p.get_longitude()),
-            mods: p.get_mods().to_vec(),
-            resonators: p.get_resonators().to_vec(),
+            name: p.title,
+            coords: (p.latitude, p.longitude),
+            mods: p.mods.unwrap_or_default().to_vec(),
+            resonators: p.resonators.unwrap_or_default(),
         }
     }
 }
@@ -338,15 +335,15 @@ impl PortalCache {
     }
 
     fn get_resonators_count(&self) -> usize {
-        self.resonators.iter().filter(|r| r.is_some()).count()
+        self.resonators.len()
     }
 
     fn get_resonators_energy_sum(&self) -> u16 {
-        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| r.get_energy())).sum()
+        self.resonators.iter().map(|r| r.energy).sum()
     }
 
     fn get_resonators_max_energy_sum(&self) -> u16 {
-        self.resonators.iter().filter_map(|r| r.as_ref().map(|r| get_portal_max_energy_by_level(r.get_level()))).sum()
+        self.resonators.iter().map(|r| get_portal_max_energy_by_level(r.level)).sum()
     }
 
     // fn all_resonators_lost_the_same(&self, other: &Self, perc: u8) -> bool {
@@ -395,12 +392,12 @@ pub async fn portal_survey(config: &config::Config, intel: &Intel<'_>, senders: 
             match get_portal_details_with_retry(intel, portal_id).await {
                 Ok(res) => {
                     let new_cache = PortalCache::from(res.result);
-                    if let Some(cached) = cache.get(portal_id) {
-                        if let Some(msg) = cached.alarm(portal_id, &new_cache) {
-                            for user_id in users {
-                                if let Err(err) = senders[user_id].send(Bot::Portal(msg.clone())) {
-                                    error!("Portal survey sender error: {err}");
-                                }
+                    if let Some(cached) = cache.get(portal_id)
+                        && let Some(msg) = cached.alarm(portal_id, &new_cache)
+                    {
+                        for user_id in users {
+                            if let Err(err) = senders[user_id].send(Bot::Portal(msg.clone())) {
+                                error!("Portal survey sender error: {err}");
                             }
                         }
                     }
@@ -432,12 +429,13 @@ pub async fn map_survey<C>(
         let next_trigger = now.date().and_hms_opt(0, 0, 0).expect("Midnight failed") + chrono::Duration::days(1);
         time::sleep((next_trigger - now).to_std().expect("Duration conversion failed")).await;
         SCANNING.store(true, Ordering::Relaxed);
+        error!("SCANNING");
         for zone in config.zones.iter() {
-            let from_lat = zone.from[0] as f64 / 1000000_f64;
-            let from_lng = zone.from[1] as f64 / 1000000_f64;
-            let to_lat = zone.to[0] as f64 / 1000000_f64;
-            let to_lng = zone.to[1] as f64 / 1000000_f64;
-            if let Ok(entities) = intel
+            let from_lat = zone.from[0] as f64 / 1_000_000_f64;
+            let from_lng = zone.from[1] as f64 / 1_000_000_f64;
+            let to_lat = zone.to[0] as f64 / 1_000_000_f64;
+            let to_lng = zone.to[1] as f64 / 1_000_000_f64;
+            if let Ok(stream) = intel
                 .get_entities_in_range(
                     (from_lat, from_lng),
                     (to_lat, to_lng),
@@ -445,37 +443,38 @@ pub async fn map_survey<C>(
                     None,
                     None,
                     None,
-                    (1, Duration::from_secs(1)),
+                    Duration::from_secs(1),
                 )
                 .await
             {
                 let mut list = HashMap::new();
-                for portal in entities.iter().flat_map(|e| &e.entities) {
-                    if !portal.is_portal() {
-                        continue;
-                    }
+                let mut stream = pin!(stream);
+                while let Some(portals) = stream.next().await {
+                    for portal in portals.into_iter().flat_map(|p| p.entities) {
+                        let Some(portal) = portal.into_portal() else {
+                            continue;
+                        };
+                        error!("{portal:?}");
 
-                    if database::portal::should_scan(conn, portal).await {
-                        if let Err(err) = portal_tx.send((
-                            PortalOrCoords::Portal { id: portal.get_id().unwrap().to_owned() },
-                            portal.get_timestamp().unwrap() as i64,
-                        )) {
+                        // enqueue for async scan if changed
+                        if database::portal::should_scan(conn, &portal).await
+                            && let Err(err) =
+                                portal_tx.send((PortalOrCoords::Portal { id: portal.id }, portal.timestamp))
+                        {
                             error!("Portal scan queue error: {err}");
                         }
-                    }
 
-                    if let (Some(name), Some(level), Some(faction), Some(lat), Some(lon)) = (
-                        portal.get_name(),
-                        portal.get_level(),
-                        portal.get_faction(),
-                        portal.get_latitude().and_then(Decimal::from_f64),
-                        portal.get_longitude().and_then(Decimal::from_f64),
-                    ) {
-                        if level < 7 || faction.is_machina() {
+                        if portal.entity.level < 7 || portal.entity.faction.is_machina() {
                             continue;
                         }
-                        let sublist = list.entry((level, faction)).or_insert_with(Vec::new);
-                        sublist.push(entities::Portal { name, address: "maps", lat, lon });
+
+                        let sublist = list.entry((portal.entity.level, portal.entity.faction)).or_insert_with(Vec::new);
+                        sublist.push(entities::Portal {
+                            name: portal.entity.title,
+                            address: SmolStr::new_static("maps"),
+                            lat: portal.entity.latitude,
+                            lon: portal.entity.longitude,
+                        });
                     }
                 }
                 if !list.is_empty() {
@@ -490,7 +489,7 @@ pub async fn map_survey<C>(
                                     .filter(|((_, f2), _)| f1 == f2)
                                     .flat_map(|(_, sublist)| {
                                         sublist.iter().flat_map(|p2| {
-                                            let dist = calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon))?;
+                                            let dist = calc_dist((p1.lat, p1.lon), (p2.lat, p2.lon));
                                             // limit to 1 Km distances
                                             (dist < 1.0).then_some(dist)
                                         })
@@ -500,7 +499,7 @@ pub async fn map_survey<C>(
                         })
                         .fold(HashMap::new(), |mut acc, ((f, lat, lon), t)| {
                             let faction: &mut HashMap<_, _> = acc.entry(f).or_default();
-                            faction.insert((lat, lon), t);
+                            faction.insert(Coord::new(lat, lon), t);
                             acc
                         });
                     let biggest_cluster = distances
@@ -541,7 +540,7 @@ pub async fn map_survey<C>(
                                     slot += 1;
                                 }
                                 msgs[slot].push('\n');
-                                if distances[&faction].get(&(portal.lat, portal.lon))
+                                if distances[&faction].get(&Coord::new(portal.lat, portal.lon))
                                     == Some(&(biggest_cluster[&faction], min_distance[&faction]))
                                 {
                                     msgs[slot].push_str(symbols::EXPLOSION);
@@ -576,11 +575,11 @@ pub async fn map_survey<C>(
     }
 }
 
-fn calc_dist((lat_from, lon_from): (Decimal, Decimal), (lat_to, lon_to): (Decimal, Decimal)) -> Option<f64> {
-    let lat_from = lat_from.to_f64()?.to_radians();
-    let lon_from = lon_from.to_f64()?.to_radians();
-    let lat_to = lat_to.to_f64()?.to_radians();
-    let lon_to = lon_to.to_f64()?.to_radians();
+fn calc_dist((lat_from, lon_from): (f64, f64), (lat_to, lon_to): (f64, f64)) -> f64 {
+    let lat_from = lat_from.to_radians();
+    let lon_from = lon_from.to_radians();
+    let lat_to = lat_to.to_radians();
+    let lon_to = lon_to.to_radians();
 
     let lat_delta = lat_to - lat_from;
     let lon_delta = lon_to - lon_from;
@@ -589,23 +588,24 @@ fn calc_dist((lat_from, lon_from): (Decimal, Decimal), (lat_to, lon_to): (Decima
         * ((lat_delta / 2_f64).sin().powi(2) + lat_from.cos() * lat_to.cos() * (lon_delta / 2_f64).sin().powi(2))
             .sqrt()
             .asin();
-    Some(angle * 6371_f64)
+    angle * 6371_f64
 }
 
-fn split_by_anchor<'a>(
-    mut sublist: Vec<entities::Portal<'a>>,
-    anchors: &'a Option<HashMap<String, (Decimal, Decimal)>>,
-) -> HashMap<Option<&'a str>, Vec<entities::Portal<'a>>> {
-    sublist.sort_unstable_by(|p1, p2| p1.name.cmp(p2.name));
+fn split_by_anchor<T>(
+    mut sublist: Vec<entities::Portal<T>>,
+    anchors: &Option<config::Anchors>,
+) -> HashMap<Option<&str>, Vec<entities::Portal<T>>>
+where
+    T: Ord,
+{
+    sublist.sort_unstable_by(|p1, p2| p1.name.cmp(&p2.name));
 
     if let Some(anchors) = anchors {
         let mut temp = HashMap::with_capacity(anchors.len());
         for portal in sublist {
             let mut nearest_anchor = None;
             for (name, coords) in anchors {
-                let Some(distance) = calc_dist(*coords, (portal.lat, portal.lon)) else {
-                    continue;
-                };
+                let distance = calc_dist(*coords, (portal.lat, portal.lon));
                 if nearest_anchor.is_none() || nearest_anchor.is_some_and(|(_, dist)| distance < dist) {
                     nearest_anchor = Some((name.as_str(), distance));
                 }
@@ -621,9 +621,17 @@ fn split_by_anchor<'a>(
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Coord(i64, i64);
+
+impl Coord {
+    fn new(lat: f64, lon: f64) -> Self {
+        Self((lat * 1_000_000_f64) as i64, (lon * 1_000_000_f64) as i64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use rust_decimal_macros::dec;
     use tracing::{debug, info};
 
     #[test]
@@ -670,55 +678,35 @@ anchors:
 "#;
         let zone = serde_yaml::from_str::<super::config::Zone>(s).unwrap();
         let portals = vec![
-            super::entities::Portal {
-                address: "",
-                name: "Barbeque di comunità",
-                lat: dec!(45.731941),
-                lon: dec!(11.733353),
-            },
-            super::entities::Portal {
-                address: "",
-                name: "Capitello Di San Antonio",
-                lat: dec!(45.741326),
-                lon: dec!(11.702951),
-            },
+            super::entities::Portal { address: "", name: "Barbeque di comunità", lat: 45.731941, lon: 11.733353 },
+            super::entities::Portal { address: "", name: "Capitello Di San Antonio", lat: 45.741326, lon: 11.702951 },
             super::entities::Portal {
                 address: "",
                 name: "Capitello Madonna Di Lourdes Bassano del Grappa",
-                lat: dec!(45.772172),
-                lon: dec!(11.733284),
+                lat: 45.772172,
+                lon: 11.733284,
             },
-            super::entities::Portal {
-                address: "",
-                name: "Chiesa Cristo Risorto",
-                lat: dec!(45.427441),
-                lon: dec!(11.912055),
-            },
+            super::entities::Portal { address: "", name: "Chiesa Cristo Risorto", lat: 45.427441, lon: 11.912055 },
             super::entities::Portal {
                 address: "",
                 name: "Chiesa New Cambridge Institute",
-                lat: dec!(45.783447),
-                lon: dec!(11.750467),
+                lat: 45.783447,
+                lon: 11.750467,
             },
-            super::entities::Portal {
-                address: "",
-                name: "Cimitero Monticelli",
-                lat: dec!(45.272928),
-                lon: dec!(11.762706),
-            },
-            super::entities::Portal { address: "", name: "Die Musikanten", lat: dec!(45.452644), lon: dec!(12.490934) },
+            super::entities::Portal { address: "", name: "Cimitero Monticelli", lat: 45.272928, lon: 11.762706 },
+            super::entities::Portal { address: "", name: "Die Musikanten", lat: 45.452644, lon: 12.490934 },
             super::entities::Portal {
                 address: "",
                 name: "Gufo in legno di Via Toscanini",
-                lat: dec!(45.770794),
-                lon: dec!(11.761828),
+                lat: 45.770794,
+                lon: 11.761828,
             },
-            super::entities::Portal { address: "", name: "Madonna", lat: dec!(45.76114), lon: dec!(11.76153) },
+            super::entities::Portal { address: "", name: "Madonna", lat: 45.76114, lon: 11.76153 },
             super::entities::Portal {
                 address: "",
                 name: "Piccolo Capitello Alla Madonna - Rosà",
-                lat: dec!(45.720975),
-                lon: dec!(11.733372),
+                lat: 45.720975,
+                lon: 11.733372,
             },
         ];
         let split = super::split_by_anchor(portals, &zone.anchors);
@@ -784,14 +772,14 @@ anchors:
                 source: Portal {
                     name: "Affreschi - Leoni Marciani",
                     address: "Piazza Erbe, 16, 35122 Padova PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.406791),
-                    lon: rust_decimal_macros::dec!(11.874924),
+                    lat: 45.406791,
+                    lon: 11.874924,
                 },
                 target: Portal {
                     name: "Colonna Papale",
                     address: "Piazza della Frutta, 35139 Padua, Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407691),
-                    lon: rust_decimal_macros::dec!(11.875351),
+                    lat: 45.407691,
+                    lon: 11.875351,
                 },
                 time: 1719762105468,
             },
@@ -800,14 +788,14 @@ anchors:
                 source: Portal {
                     name: "Affresco",
                     address: "Via San Canziano, 2, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406483),
-                    lon: rust_decimal_macros::dec!(11.876685),
+                    lat: 45.406483,
+                    lon: 11.876685,
                 },
                 target: Portal {
                     name: "Chiesa Di San Canziano",
                     address: "Via delle Piazze, 1, 35122 Padova PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.406307),
-                    lon: rust_decimal_macros::dec!(11.876288),
+                    lat: 45.406307,
+                    lon: 11.876288,
                 },
                 time: 1719762105468,
             },
@@ -816,8 +804,8 @@ anchors:
                 portal: Portal {
                     name: "Il Corso",
                     address: "Riviera Tito Livio, 12, 35123 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.405879),
-                    lon: rust_decimal_macros::dec!(11.877112),
+                    lat: 45.405879,
+                    lon: 11.877112,
                 },
                 time: 1719762110383,
             },
@@ -826,8 +814,8 @@ anchors:
                 portal: Portal {
                     name: "Icona votiva in metalo",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385771),
-                    lon: rust_decimal_macros::dec!(11.798939),
+                    lat: 45.385771,
+                    lon: 11.798939,
                 },
                 time: 1719762126826,
             },
@@ -836,8 +824,8 @@ anchors:
                 portal: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 time: 1719762127331,
             },
@@ -846,8 +834,8 @@ anchors:
                 portal: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 time: 1719762127331,
             },
@@ -856,8 +844,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 time: 1719762128785,
             },
@@ -866,8 +854,8 @@ anchors:
                 portal: Portal {
                     name: "Targa gemellaggio",
                     address: "Via Garibaldi, 8, 33040 Pradamano UD, Italy",
-                    lat: rust_decimal_macros::dec!(46.033355),
-                    lon: rust_decimal_macros::dec!(13.306374),
+                    lat: 46.033355,
+                    lon: 13.306374,
                 },
                 mu: 449,
                 time: 1719762182507,
@@ -877,14 +865,14 @@ anchors:
                 source: Portal {
                     name: "Targa gemellaggio",
                     address: "Via Garibaldi, 8, 33040 Pradamano UD, Italy",
-                    lat: rust_decimal_macros::dec!(46.033355),
-                    lon: rust_decimal_macros::dec!(13.306374),
+                    lat: 46.033355,
+                    lon: 13.306374,
                 },
                 target: Portal {
                     name: "La mucca",
                     address: "Via Lovaria, 48, 33050 Pavia di Udine UD, Italy",
-                    lat: rust_decimal_macros::dec!(46.003295),
-                    lon: rust_decimal_macros::dec!(13.303723),
+                    lat: 46.003295,
+                    lon: 13.303723,
                 },
                 time: 1719762182507,
             },
@@ -893,8 +881,8 @@ anchors:
                 portal: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 time: 1719762186104,
             },
@@ -903,8 +891,8 @@ anchors:
                 portal: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 time: 1719762186104,
             },
@@ -913,8 +901,8 @@ anchors:
                 portal: Portal {
                     name: "Icona votiva in metalo",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385771),
-                    lon: rust_decimal_macros::dec!(11.798939),
+                    lat: 45.385771,
+                    lon: 11.798939,
                 },
                 time: 1719762191686,
             },
@@ -923,8 +911,8 @@ anchors:
                 portal: Portal {
                     name: "Icona votiva in metalo",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385771),
-                    lon: rust_decimal_macros::dec!(11.798939),
+                    lat: 45.385771,
+                    lon: 11.798939,
                 },
                 time: 1719762191686,
             },
@@ -933,14 +921,14 @@ anchors:
                 source: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 target: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 time: 1719762196591,
             },
@@ -949,14 +937,14 @@ anchors:
                 source: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 target: Portal {
                     name: "Bassorilievo con draghi",
                     address: "Piazza della Frutta, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407338),
-                    lon: rust_decimal_macros::dec!(11.874792),
+                    lat: 45.407338,
+                    lon: 11.874792,
                 },
                 time: 1719762199621,
             },
@@ -965,8 +953,8 @@ anchors:
                 portal: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 mu: 3,
                 time: 1719762201732,
@@ -976,14 +964,14 @@ anchors:
                 source: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 target: Portal {
                     name: "Street Art Kitty",
                     address: "Via Pietro D'Abano, 35139 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407846),
-                    lon: rust_decimal_macros::dec!(11.875054),
+                    lat: 45.407846,
+                    lon: 11.875054,
                 },
                 time: 1719762201732,
             },
@@ -992,8 +980,8 @@ anchors:
                 portal: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 mu: 15,
                 time: 1719762203796,
@@ -1003,14 +991,14 @@ anchors:
                 source: Portal {
                     name: "Generale tedesco",
                     address: "Via dei Fabbri, 18, 35122 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406674),
-                    lon: rust_decimal_macros::dec!(11.875542),
+                    lat: 45.406674,
+                    lon: 11.875542,
                 },
                 target: Portal {
                     name: "Palazzo Papafava dei Carraresi",
                     address: "Via Cesare Battisti, 3, 35121 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407108),
-                    lon: rust_decimal_macros::dec!(11.877477),
+                    lat: 45.407108,
+                    lon: 11.877477,
                 },
                 time: 1719762203796,
             },
@@ -1019,14 +1007,14 @@ anchors:
                 source: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 target: Portal {
                     name: "Street Art Kitty",
                     address: "Via Pietro D'Abano, 35139 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407846),
-                    lon: rust_decimal_macros::dec!(11.875054),
+                    lat: 45.407846,
+                    lon: 11.875054,
                 },
                 time: 1719762257090,
             },
@@ -1035,8 +1023,8 @@ anchors:
                 portal: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 mu: 2,
                 time: 1719762257090,
@@ -1046,8 +1034,8 @@ anchors:
                 portal: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 mu: 1,
                 time: 1719762258921,
@@ -1057,8 +1045,8 @@ anchors:
                 portal: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 mu: 12,
                 time: 1719762258921,
@@ -1068,14 +1056,14 @@ anchors:
                 source: Portal {
                     name: "Fontana di Piazza delle Erbe",
                     address: "Via Municipio, 35122 Padua, Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.406794),
-                    lon: rust_decimal_macros::dec!(11.875778),
+                    lat: 45.406794,
+                    lon: 11.875778,
                 },
                 target: Portal {
                     name: "Palazzo Papafava dei Carraresi",
                     address: "Via Cesare Battisti, 3, 35121 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.407108),
-                    lon: rust_decimal_macros::dec!(11.877477),
+                    lat: 45.407108,
+                    lon: 11.877477,
                 },
                 time: 1719762258921,
             },
@@ -1084,8 +1072,8 @@ anchors:
                 portal: Portal {
                     name: "Parco Perlasca",
                     address: "Via S. Domenico, 23, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385408),
-                    lon: rust_decimal_macros::dec!(11.798846),
+                    lat: 45.385408,
+                    lon: 11.798846,
                 },
                 time: 1719762277847,
             },
@@ -1094,8 +1082,8 @@ anchors:
                 portal: Portal {
                     name: "Chiesa San Domenico",
                     address: "Via San Giuseppe, 48, 35030 Selvazzano Dentro Province of Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.386584),
-                    lon: rust_decimal_macros::dec!(11.798832),
+                    lat: 45.386584,
+                    lon: 11.798832,
                 },
                 time: 1719762282386,
             },
@@ -1104,8 +1092,8 @@ anchors:
                 portal: Portal {
                     name: "La tradotta. 12",
                     address: "Via Lavaio Basso, 50, 31040 Volpago del Montello TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.776674),
-                    lon: rust_decimal_macros::dec!(12.139036),
+                    lat: 45.776674,
+                    lon: 12.139036,
                 },
                 time: 1719762290341,
             },
@@ -1114,8 +1102,8 @@ anchors:
                 portal: Portal {
                     name: "La tradotta. 12",
                     address: "Via Lavaio Basso, 50, 31040 Volpago del Montello TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.776674),
-                    lon: rust_decimal_macros::dec!(12.139036),
+                    lat: 45.776674,
+                    lon: 12.139036,
                 },
                 time: 1719762290341,
             },
@@ -1124,8 +1112,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 time: 1719762298866,
             },
@@ -1134,8 +1122,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 mu: 413,
                 time: 1719762321362,
@@ -1145,8 +1133,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 mu: 7,
                 time: 1719762321362,
@@ -1156,14 +1144,14 @@ anchors:
                 source: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 target: Portal {
                     name: "Parco Comunale",
                     address: "Via Piemonte, 11, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.389606),
-                    lon: rust_decimal_macros::dec!(11.787943),
+                    lat: 45.389606,
+                    lon: 11.787943,
                 },
                 time: 1719762321362,
             },
@@ -1172,14 +1160,14 @@ anchors:
                 source: Portal {
                     name: "Bassorilievo Madonna di Fatima con crocifisso",
                     address: "Via S. Domenico, 212, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385465),
-                    lon: rust_decimal_macros::dec!(11.799183),
+                    lat: 45.385465,
+                    lon: 11.799183,
                 },
                 target: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 time: 1719762321362,
             },
@@ -1188,14 +1176,14 @@ anchors:
                 source: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 target: Portal {
                     name: "Capitello S. Lorenzo",
                     address: "Via San Lorenzo, 29, 35031 Abano Terme Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.372064),
-                    lon: rust_decimal_macros::dec!(11.798754),
+                    lat: 45.372064,
+                    lon: 11.798754,
                 },
                 time: 1719762321362,
             },
@@ -1204,8 +1192,8 @@ anchors:
                 portal: Portal {
                     name: "Bassorilievo Madonna di Fatima con crocifisso",
                     address: "Via S. Domenico, 212, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385465),
-                    lon: rust_decimal_macros::dec!(11.799183),
+                    lat: 45.385465,
+                    lon: 11.799183,
                 },
                 time: 1719762323258,
             },
@@ -1217,14 +1205,14 @@ anchors:
                 source: Portal {
                     name: "Murale Boogie - Orion",
                     address: "Corso Milano, 177, 35139 Padova PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.411193),
-                    lon: rust_decimal_macros::dec!(11.866572),
+                    lat: 45.411193,
+                    lon: 11.866572,
                 },
                 target: Portal {
                     name: "Jump Street art",
                     address: "Via Digione, 3, 35138 Padova PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.411968),
-                    lon: rust_decimal_macros::dec!(11.861669),
+                    lat: 45.411968,
+                    lon: 11.861669,
                 },
                 time: 1719762338124,
             },
@@ -1233,14 +1221,14 @@ anchors:
                 source: Portal {
                     name: "Icona votiva in metalo",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385771),
-                    lon: rust_decimal_macros::dec!(11.798939),
+                    lat: 45.385771,
+                    lon: 11.798939,
                 },
                 target: Portal {
                     name: "Campo da Basket",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.386327),
-                    lon: rust_decimal_macros::dec!(11.799340),
+                    lat: 45.386327,
+                    lon: 11.799340,
                 },
                 time: 1719762338577,
             },
@@ -1252,14 +1240,14 @@ anchors:
                 source: Portal {
                     name: "Breda di Piave - Murales giochi estivi",
                     address: "Via Roma, 8, 31030 Breda di Piave TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.720428),
-                    lon: rust_decimal_macros::dec!(12.329917),
+                    lat: 45.720428,
+                    lon: 12.329917,
                 },
                 target: Portal {
                     name: "Ufficio Postale di Breda di Piave",
                     address: "N,, Piazza Italia, 13, 31030 Breda di Piave TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.720827),
-                    lon: rust_decimal_macros::dec!(12.332374),
+                    lat: 45.720827,
+                    lon: 12.332374,
                 },
                 time: 1719762355092,
             },
@@ -1271,14 +1259,14 @@ anchors:
                 source: Portal {
                     name: "Fontana Perpetua",
                     address: "Via Citolo da Perugia, 1, 35138 Padova PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.416486),
-                    lon: rust_decimal_macros::dec!(11.875661),
+                    lat: 45.416486,
+                    lon: 11.875661,
                 },
                 target: Portal {
                     name: "Serbatoio dell'acquedotto",
                     address: "Viale della Rotonda, 35138 Padua, Italy",
-                    lat: rust_decimal_macros::dec!(45.416235),
-                    lon: rust_decimal_macros::dec!(11.875290),
+                    lat: 45.416235,
+                    lon: 11.875290,
                 },
                 time: 1719762369998,
             },
@@ -1287,8 +1275,8 @@ anchors:
                 portal: Portal {
                     name: "La tradotta. segnale con avviso accoppiato",
                     address: "Via Schiavonesca Vecchia, 67B, 31040 Volpago del Montello TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.777523),
-                    lon: rust_decimal_macros::dec!(12.141673),
+                    lat: 45.777523,
+                    lon: 12.141673,
                 },
                 time: 1719762372528,
             },
@@ -1297,8 +1285,8 @@ anchors:
                 portal: Portal {
                     name: "La tradotta. segnale con avviso accoppiato",
                     address: "Via Schiavonesca Vecchia, 67B, 31040 Volpago del Montello TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.777523),
-                    lon: rust_decimal_macros::dec!(12.141673),
+                    lat: 45.777523,
+                    lon: 12.141673,
                 },
                 time: 1719762372528,
             },
@@ -1307,8 +1295,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 time: 1719762409260,
             },
@@ -1317,8 +1305,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 time: 1719762409260,
             },
@@ -1327,14 +1315,14 @@ anchors:
                 source: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 target: Portal {
                     name: "Icona votiva in metalo",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385771),
-                    lon: rust_decimal_macros::dec!(11.798939),
+                    lat: 45.385771,
+                    lon: 11.798939,
                 },
                 time: 1719762432825,
             },
@@ -1343,8 +1331,8 @@ anchors:
                 portal: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 mu: 1,
                 time: 1719762434058,
@@ -1354,14 +1342,14 @@ anchors:
                 source: Portal {
                     name: "Campo da calcio in erba sintetica",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.385714),
-                    lon: rust_decimal_macros::dec!(11.799382),
+                    lat: 45.385714,
+                    lon: 11.799382,
                 },
                 target: Portal {
                     name: "Campo da Basket",
                     address: "Via S. Domenico, 12, 35030 Selvazzano Dentro PD, Italy",
-                    lat: rust_decimal_macros::dec!(45.386327),
-                    lon: rust_decimal_macros::dec!(11.799340),
+                    lat: 45.386327,
+                    lon: 11.799340,
                 },
                 time: 1719762434058,
             },
@@ -1373,14 +1361,14 @@ anchors:
                 source: Portal {
                     name: "Parco Giochi Delle Piscine",
                     address: "Vicolo Giacomo Zanella, 67/A, 31100 Treviso TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.670559),
-                    lon: rust_decimal_macros::dec!(12.268073),
+                    lat: 45.670559,
+                    lon: 12.268073,
                 },
                 target: Portal {
                     name: "Selvana - Campo da Calcio",
                     address: "Via Giacomo Zannella, 7B, 31100 Treviso TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.675267),
-                    lon: rust_decimal_macros::dec!(12.263910),
+                    lat: 45.675267,
+                    lon: 12.263910,
                 },
                 time: 1719762532642,
             },
@@ -1392,14 +1380,14 @@ anchors:
                 source: Portal {
                     name: "Parco Giochi Delle Piscine",
                     address: "Vicolo Giacomo Zanella, 67/A, 31100 Treviso TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.670559),
-                    lon: rust_decimal_macros::dec!(12.268073),
+                    lat: 45.670559,
+                    lon: 12.268073,
                 },
                 target: Portal {
                     name: "Treviso - Fontanella con drago",
                     address: "Via Castello d'Amore, 40, 31100 Treviso TV, Italy",
-                    lat: rust_decimal_macros::dec!(45.673175),
-                    lon: rust_decimal_macros::dec!(12.257950),
+                    lat: 45.673175,
+                    lon: 12.257950,
                 },
                 time: 1719762532642,
             },
@@ -1411,14 +1399,14 @@ anchors:
                 source: Portal {
                     name: "A.M.G. Judo Murano",
                     address: "Fondamenta Antonio Colleoni, 14, 30141 Venezia VE, Italy",
-                    lat: rust_decimal_macros::dec!(45.455210),
-                    lon: rust_decimal_macros::dec!(12.354014),
+                    lat: 45.455210,
+                    lon: 12.354014,
                 },
                 target: Portal {
                     name: "Leone alato S.Marco",
                     address: "Fondamenta Andrea Navagero, 59, 30141 Venezia VE, Italy",
-                    lat: rust_decimal_macros::dec!(45.454742),
-                    lon: rust_decimal_macros::dec!(12.356855),
+                    lat: 45.454742,
+                    lon: 12.356855,
                 },
                 time: 1719762782388,
             },
@@ -1430,14 +1418,14 @@ anchors:
                 source: Portal {
                     name: "A.M.G. Judo Murano",
                     address: "Fondamenta Antonio Colleoni, 14, 30141 Venezia VE, Italy",
-                    lat: rust_decimal_macros::dec!(45.455210),
-                    lon: rust_decimal_macros::dec!(12.354014),
+                    lat: 45.455210,
+                    lon: 12.354014,
                 },
                 target: Portal {
                     name: "Poste Italiane Murano LY",
                     address: "Fondamenta Antonio Maschio, 47-48, 30141 Venezia VE, Italy",
-                    lat: rust_decimal_macros::dec!(45.455478),
-                    lon: rust_decimal_macros::dec!(12.356645),
+                    lat: 45.455478,
+                    lon: 12.356645,
                 },
                 time: 1719762782388,
             },

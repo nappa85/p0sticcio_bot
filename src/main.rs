@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, future, time::Duration};
+use std::{borrow::Cow, collections::HashMap, env, future, time::Duration};
 
 use futures_util::StreamExt;
 use ingress_intel_rs::Intel;
@@ -108,7 +108,7 @@ async fn main() {
         .expect("Client build failed");
     let username = env::var("USERNAME").ok();
     let password = env::var("PASSWORD").ok();
-    let intel = Intel::new(&client, username.as_deref(), password.as_deref());
+    let intel = Intel::new(&client, username.map(Cow::Owned), password.map(Cow::Owned));
 
     if let Ok(cookies) = env::var("COOKIES") {
         intel

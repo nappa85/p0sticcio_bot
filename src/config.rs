@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 
-// use rust_decimal::Decimal;
-
-use rust_decimal::Decimal;
+use serde::{Deserialize, Deserializer};
+use smol_str::SmolStr;
 use tokio::{fs::File, io::AsyncReadExt};
 
-use serde::{Deserialize, Deserializer};
-
 use crate::entities::Plext;
+
+pub type Anchors = HashMap<SmolStr, (f64, f64)>;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -20,16 +19,16 @@ pub struct Zone {
     pub to: [u64; 2],
     pub users: HashMap<u64, Filter>,
     #[serde(deserialize_with = "deserialize_anchors")]
-    pub anchors: Option<HashMap<String, (Decimal, Decimal)>>,
+    pub anchors: Option<Anchors>,
 }
 
-fn deserialize_anchors<'de, D>(deserializer: D) -> Result<Option<HashMap<String, (Decimal, Decimal)>>, D::Error>
+fn deserialize_anchors<'de, D>(deserializer: D) -> Result<Option<Anchors>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let temp = Option::<HashMap<String, [i64; 2]>>::deserialize(deserializer)?;
+    let temp = Option::<HashMap<SmolStr, [f64; 2]>>::deserialize(deserializer)?;
     Ok(temp.map(|t| {
-        t.into_iter().map(|(name, coords)| (name, (Decimal::new(coords[0], 6), Decimal::new(coords[1], 6)))).collect()
+        t.into_iter().map(|(name, coords)| (name, (coords[0] / 1_000_000_f64, coords[1] / 1_000_000_f64))).collect()
     }))
 }
 
@@ -39,11 +38,11 @@ pub struct Filter {
     pub send_all: Option<bool>,
     pub resume: Option<bool>,
     // pub portals: Option<Vec<(Decimal, Decimal)>>,
-    pub portals: Option<Vec<String>>,
+    pub portals: Option<Vec<SmolStr>>,
     #[serde(rename = "minMU")]
     pub min_mu: Option<usize>,
-    pub agents: Option<Vec<String>>,
-    pub text: Option<String>,
+    pub agents: Option<Vec<SmolStr>>,
+    pub text: Option<SmolStr>,
 }
 
 impl Filter {
@@ -174,12 +173,11 @@ impl Filter {
                 _ => {}
             }
         }
-        if let Some(s) = &self.text {
-            if let Plext::Unknown { text, .. } = msg {
-                if text.contains(s) {
-                    return true;
-                }
-            }
+        if let Some(s) = &self.text
+            && let Plext::Unknown { text, .. } = msg
+            && text.contains(s.as_str())
+        {
+            return true;
         }
         self.send_all.unwrap_or_default()
     }

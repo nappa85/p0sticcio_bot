@@ -1,7 +1,7 @@
 use ingress_intel_rs::entities;
 use sea_orm::entity::prelude::*;
 
-use super::{portal_mods, portal_resonators};
+// use super::{portal_mods, portal_resonators};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "portal_revisions")]
@@ -18,15 +18,15 @@ pub struct Model {
     pub owner: Option<String>,
 }
 
-impl Model {
-    pub async fn mods<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_mods::Model>, DbErr> {
-        portal_mods::Entity::find().filter(portal_mods::Column::RevisionId.eq(self.id)).all(conn).await
-    }
+// impl Model {
+//     pub async fn mods<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_mods::Model>, DbErr> {
+//         portal_mods::Entity::find().filter(portal_mods::Column::RevisionId.eq(self.id)).all(conn).await
+//     }
 
-    pub async fn resonators<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_resonators::Model>, DbErr> {
-        portal_resonators::Entity::find().filter(portal_resonators::Column::RevisionId.eq(self.id)).all(conn).await
-    }
-}
+//     pub async fn resonators<C: ConnectionTrait>(&self, conn: &C) -> Result<Vec<portal_resonators::Model>, DbErr> {
+//         portal_resonators::Entity::find().filter(portal_resonators::Column::RevisionId.eq(self.id)).all(conn).await
+//     }
+// }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
