@@ -95,14 +95,16 @@ where
         match res
             .result
             .map
-            .iter()
-            .flat_map(|(_id, entity)| match entity {
+            .values()
+            .flat_map(|entity| match entity {
                 IntelResult::Error(_) => &[],
                 IntelResult::Entities(e) => e.entities.as_slice(),
             })
             .filter_map(|entity| entity.as_portal())
             .find_map(|portal| {
-                if (lat - portal.entity.latitude).abs() < 0.000001 && (lon - portal.entity.longitude).abs() < 0.000001 {
+                if (lat.abs() - portal.entity.latitude.abs()).abs() < 0.000001
+                    && (lon.abs() - portal.entity.longitude.abs()).abs() < 0.000001
+                {
                     Some(portal.id.as_str())
                 } else {
                     None
@@ -110,7 +112,8 @@ where
             }) {
             Some(id) => return Ok(Some(id.to_smolstr())),
             None => {
-                warn!(
+                let retry = res.result.map.values().any(|entity| matches!(entity, IntelResult::Error(_)));
+                debug!(
                     "Can't find portal on coordinates {lat},{lon} retry {i} between {:?}",
                     res.result
                         .map
@@ -129,7 +132,11 @@ where
                         })
                         .collect::<Vec<_>>()
                 );
-                continue;
+                if retry {
+                    continue;
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -222,11 +229,9 @@ pub async fn comm_survey(
                         }
                     }
                 }
-                Err(ingress_intel_rs::Error::Deserialize) => {
-                    if !SCANNING.load(Ordering::Relaxed) {
-                        warn!("Probably rate limited, restart");
-                        return;
-                    }
+                Err(ingress_intel_rs::Error::Deserialize) if !SCANNING.load(Ordering::Relaxed) => {
+                    warn!("Probably rate limited, restart");
+                    return;
                 }
                 _ => {}
             }
@@ -246,7 +251,10 @@ pub async fn portal_scanner<C>(
             PortalOrCoords::Portal { id } => id,
             PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(conn, intel, lat, lon).await {
                 Ok(Some(id)) => id,
-                _ => continue,
+                _ => {
+                    warn!("Can't find portal on coordinates {lat},{lon}");
+                    continue;
+                }
             },
         };
 
@@ -279,7 +287,7 @@ pub async fn portal_scanner<C>(
 
 struct PortalCache {
     name: SmolStr,
-    coords: (f64, f64),
+    //coords: (f64, f64),
     mods: Vec<Option<IntelMod>>,
     resonators: Vec<IntelResonator>,
 }
@@ -288,7 +296,7 @@ impl From<IntelPortal> for PortalCache {
     fn from(p: IntelPortal) -> Self {
         PortalCache {
             name: p.title,
-            coords: (p.latitude, p.longitude),
+            //coords: (p.latitude, p.longitude),
             mods: p.mods.unwrap_or_default().to_vec(),
             resonators: p.resonators.unwrap_or_default(),
         }
@@ -326,12 +334,10 @@ impl PortalCache {
             None
         } else {
             Some(format!(
-                "{}Portal [{}](https://link.ingress.com/?link=https%3a%2f%2fintel.ingress.com%2fportal%2f{}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3a%2f%2fapps.apple.com%2fapp%2fingress%2fid576505181&ofl=https%3a%2f%2fintel.ingress.com%2fintel%3fpll%3d{}%2c{}) lost:\n{}",
+                "{}Portal [{}](https://link.ingress.com/portal/{}) lost:\n{}",
                 symbols::ALERT,
                 self.name,
                 portal_id,
-                self.coords.0,
-                self.coords.1,
                 alarms.join("\n")
             ))
         }
@@ -410,11 +416,9 @@ pub async fn portal_survey(config: &config::Config, intel: &Intel<'_>, senders: 
                     }
                     cache.insert(*portal_id, new_cache);
                 }
-                Err(ingress_intel_rs::Error::Deserialize) => {
-                    if !SCANNING.load(Ordering::Relaxed) {
-                        warn!("Probably rate limited, restart");
-                        return;
-                    }
+                Err(ingress_intel_rs::Error::Deserialize) if !SCANNING.load(Ordering::Relaxed) => {
+                    warn!("Probably rate limited, restart");
+                    return;
                 }
                 _ => {}
             }

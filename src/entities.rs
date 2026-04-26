@@ -156,7 +156,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                 })
             })()
             .or_else(|_: ()| {
-                Ok(Plext::CreatedCF {
+                Ok::<_, ()>(Plext::CreatedCF {
                     player: plext
                         .markup
                         .get(2)
@@ -197,7 +197,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                 })
             })()
             .or_else(|_: ()| {
-                Ok(Plext::DestroyedCF {
+                Ok::<_, ()>(Plext::DestroyedCF {
                     player: plext
                         .markup
                         .get(1)
@@ -282,7 +282,7 @@ impl<'a> TryFrom<(PlextType, &'a ingress_intel_rs::plexts::Plext, i64)> for Plex
                 })
             })()
             .or_else(|_: ()| {
-                Ok(Plext::Linked {
+                Ok::<_, ()>(Plext::Linked {
                     player: plext
                         .markup
                         .first()
@@ -507,9 +507,7 @@ impl<'a> std::fmt::Display for Player<'a> {
 }
 
 pub fn generate_player_link(name: &str) -> String {
-    format!(
-        "[{name}](https://link.ingress.com/?link=https%3A%2F%2Fintel.ingress.com%2Fagent%2F{name}&apn=com.nianticproject.ingress&isi=576505181&ibi=com.google.ingress&ifl=https%3A%2F%2Fapps.apple.com%2Fapp%2Fingress%2Fid576505181&ofl=https%3A%2F%2Fwww.ingress.com%2F)"
-    )
+    format!("[{name}](https://link.ingress.com/agent/{name})")
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

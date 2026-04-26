@@ -1,6 +1,6 @@
 [package]
 name = "p0sticcio_bot"
-version = "0.20.0"
+version = "0.20.1"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,11 +20,10 @@ tokio = { version = "1.41", features = [
     "time",
 ] }
 tokio-stream = "0.1"
-reqwest = { version = "0.12", features = ["cookies"] }
+reqwest = { version = "0.13", features = ["cookies"] }
 ingress_intel_rs = { version = "0.8", git = "https://github.com/nappa85/ingress-intel-rs.git" }
 lru_time_cache = "0.11"
 sea-orm = { version = "1.1", features = [
-    "debug-print",
     "macros",
     "sqlx-postgres",
     "runtime-tokio-rustls",
@@ -34,7 +33,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 smol_str = "0.3"
 stream_throttle = "0.5"
-tgbot = "0.40"
+tgbot = "0.44"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

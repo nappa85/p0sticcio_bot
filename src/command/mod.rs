@@ -57,11 +57,11 @@ where
                 continue;
             }
 
-            if let UpdateType::Message(Message { id, ref data, .. }) = update.update_type {
+            if let UpdateType::Message(msg) = &update.update_type && let Message { id, data, .. } = msg.as_ref() {
                 match data {
                     MessageData::Text(msg) => {
                         // here we don't retry because it also parses the input
-                        if let Err(err) = parse_message(client, conn, chat_id, user_id, id, msg).await {
+                        if let Err(err) = parse_message(client, conn, chat_id, user_id, *id, msg).await {
                             error!("{err}\nuser_id: {user_id}\nmessage: {msg:?}");
                         }
                     }

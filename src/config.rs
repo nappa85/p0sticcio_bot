@@ -105,71 +105,59 @@ impl Filter {
         // }
         if let Some(min_mu) = &self.min_mu {
             match msg {
-                Plext::CreatedCF { mu, .. } => {
-                    if mu > min_mu {
+                Plext::CreatedCF { mu, .. }
+                    if mu > min_mu => {
                         return true;
                     }
-                }
-                Plext::DestroyedCF { mu, .. } => {
-                    if mu > min_mu {
+                Plext::DestroyedCF { mu, .. }
+                    if mu > min_mu => {
                         return true;
                     }
-                }
                 _ => {}
             }
         }
         if let Some(agents) = &self.agents {
             match msg {
-                Plext::Captured { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::Captured { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::CreatedCF { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::CreatedCF { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DestroyedCF { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DestroyedCF { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DeployedReso { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DeployedReso { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DestroyedReso { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DestroyedReso { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DestroyedLink { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DestroyedLink { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::Linked { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::Linked { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DroneReturn { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DroneReturn { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DeployedBeacon { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DeployedBeacon { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
-                Plext::DeployedFireworks { player, .. } => {
-                    if agents.iter().any(|s| s == player.get_name()) {
+                Plext::DeployedFireworks { player, .. }
+                    if agents.iter().any(|s| s == player.get_name()) => {
                         return true;
                     }
-                }
                 _ => {}
             }
         }
