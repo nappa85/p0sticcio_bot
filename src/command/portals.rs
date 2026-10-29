@@ -53,7 +53,7 @@ impl Sort {
 
     fn sort(&self) -> &'static str {
         match self {
-            Sort::Name => "p.title ASC",
+            Sort::Name => "lower(p.title) ASC",
             Sort::Level => "pr.level DESC",
             Sort::Older => "days DESC",
             Sort::Nearer => "distance ASC",
@@ -94,18 +94,29 @@ where
         None
     };
 
+    // mods and resonators joins multiply rows, group them back to one row per portal;
+    // grouping by both primary keys lets Postgres accept any p.* and pr.* column in select and order by
+    let group_by = if has_mod || has_reso { "group by p.id, pr.id " } else { "" };
+
     let query = format!(
         "select p.*{older_select}{position_select}
 from portals p
 inner join portal_revisions pr on pr.id = p.latest_revision_id
 {mod_join}
 {reso_join}
-{older_join}
 where {where_clause}
-group by p.id order by {sort}{limit}",
+{group_by}order by {sort}{limit}",
+        // days since the portal switched to its current faction:
+        // the revision right after the latest one with a different faction, or the first revision if it never changed
         older_select = if sort.is_older() {
-            //", (unix_timestamp() * 1000 - first.timestamp) / 86400000.0 days"
-            ", (extract(epoch from now() at time zone 'utc' at time zone 'utc') * 1000 - first.timestamp) / 86400000.0 days"
+            ", (extract(epoch from now()) * 1000 - (
+select r.timestamp from portal_revisions r
+where r.portal_id = p.id and r.revision = coalesce((
+select d.revision + 1 from portal_revisions d
+where d.portal_id = p.id and d.faction <> pr.faction
+order by d.revision desc limit 1
+), 0)
+)) / 86400000.0 days"
         } else {
             ""
         },
@@ -116,17 +127,6 @@ group by p.id order by {sort}{limit}",
         },
         mod_join = if has_mod { "left join portal_mods mods on pr.id = mods.revision_id" } else { "" },
         reso_join = if has_reso { "left join portal_resonators reso on pr.id = reso.revision_id" } else { "" },
-        older_join = if sort.is_older() {
-            "inner join (
-SELECT pr1.portal_id, MAX(pr1.timestamp) timestamp
-from portal_revisions pr1
-left join portal_revisions pr2 on pr1.portal_id = pr2.portal_id and pr1.revision = pr2.revision + 1
-where pr1.faction <> pr2.faction or pr2.id is null
-group by pr1.portal_id
-) first ON first.portal_id = p.id"
-        } else {
-            ""
-        },
         sort = sort.sort(),
         limit = if let Some(limit) = limit { format!(" limit {limit}") } else { String::new() },
     );

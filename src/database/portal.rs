@@ -1,5 +1,5 @@
 use ingress_intel_rs::entities;
-use sea_orm::{ActiveValue, QuerySelect, SelectColumns, TransactionTrait, entity::prelude::*};
+use sea_orm::{ActiveValue, Statement, TransactionTrait, entity::prelude::*};
 use tracing::error;
 
 use crate::entities::Portal;
@@ -37,18 +37,15 @@ impl Entity {
         conn: &C,
         portal_id: &str,
     ) -> Result<Option<portal_revision::Model>, DbErr> {
-        let Some(Some(revision_id)) = Entity::find()
-            .filter(Column::PortalId.eq(portal_id))
-            .select_only()
-            .select_column(Column::LatestRevisionId)
-            .into_tuple::<Option<i64>>()
+        // single round trip, this runs for every portal seen on every map scan
+        portal_revision::Entity::find()
+            .from_raw_sql(Statement::from_sql_and_values(
+                conn.get_database_backend(),
+                "select pr.* from portals p inner join portal_revisions pr on pr.id = p.latest_revision_id where p.portal_id = $1",
+                [portal_id.into()],
+            ))
             .one(conn)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        portal_revision::Entity::find_by_id(revision_id).one(conn).await
+            .await
     }
 }
 
@@ -153,28 +150,37 @@ pub async fn update_or_insert<C: TransactionTrait>(
     .update(&txn)
     .await?;
 
-    for r#mod in portal.mods.iter().flatten().flatten() {
-        portal_mods::ActiveModel {
+    let mods = portal
+        .mods
+        .iter()
+        .flatten()
+        .flatten()
+        .map(|r#mod| portal_mods::ActiveModel {
             revision_id: ActiveValue::Set(revision_model.id),
             mod_owner: ActiveValue::Set(r#mod.owner.to_string()),
             mod_name: ActiveValue::Set(r#mod.name.to_string()),
             mod_rarity: ActiveValue::Set(r#mod.rarity.to_string()),
             ..Default::default()
-        }
-        .insert(&txn)
-        .await?;
+        })
+        .collect::<Vec<_>>();
+    if !mods.is_empty() {
+        portal_mods::Entity::insert_many(mods).exec_without_returning(&txn).await?;
     }
 
-    for reso in portal.resonators.iter().flatten() {
-        portal_resonators::ActiveModel {
+    let resonators = portal
+        .resonators
+        .iter()
+        .flatten()
+        .map(|reso| portal_resonators::ActiveModel {
             revision_id: ActiveValue::Set(revision_model.id),
             reso_owner: ActiveValue::Set(reso.owner.to_string()),
             reso_level: ActiveValue::Set(i64::from(reso.level)),
             reso_energy: ActiveValue::Set(i64::from(reso.energy)),
             ..Default::default()
-        }
-        .insert(&txn)
-        .await?;
+        })
+        .collect::<Vec<_>>();
+    if !resonators.is_empty() {
+        portal_resonators::Entity::insert_many(resonators).exec_without_returning(&txn).await?;
     }
 
     txn.commit().await
