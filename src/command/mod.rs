@@ -15,6 +15,7 @@ use crate::config::Config;
 
 mod help;
 mod location;
+mod log;
 mod portals;
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +98,7 @@ where
     let res = match iter.next().map(|msg| msg.split_once('@').map(|(pre, _post)| pre).unwrap_or(msg)) {
         Some("/help") => help::execute(client, message_id, chat_id).await,
         Some("/portals") => portals::execute(conn, client, message_id, chat_id, user_id, iter).await,
+        Some("/log") => log::execute(conn, client, message_id, chat_id, iter).await,
         _ => return Ok(()),
     };
 
@@ -111,4 +113,16 @@ where
     }
 
     Ok(())
+}
+
+/// appends `text` on a new line of the last message, starting a new message when it would exceed telegram 4094 bytes limit
+fn push_chunked(messages: &mut Vec<String>, text: String) {
+    if let Some(message) = messages.last_mut()
+        && message.len() + text.len() + 1 <= 4094
+    {
+        message.push('\n');
+        message.push_str(&text);
+    } else {
+        messages.push(text);
+    }
 }

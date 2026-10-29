@@ -9,6 +9,7 @@ const HELP_MESSAGE: &str = r#"[P0sticcio Bot](https://github.com/nappa85/p0sticc
 
 /help - this message
 /portals `[filters]` - shows all portals matching given \[filters]
+/log `portal name or id` `[date]` - shows the latest captures, resonators and mods changes of the portal, optionally only before `date` (YYYY-MM-DD)
 
 `[filters]` can be any number of those:
 ● `{field}{comparison}{value}` - comparison between a field and a value, where comparisons can be

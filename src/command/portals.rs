@@ -156,17 +156,7 @@ where
                         .try_fold(vec![], |mut messages: Vec<String>, portal| {
                             let link = format!("{} {}", symbols::BULLET, portal.as_portal());
 
-                            // split messages to respect 4094 bytes message limit
-                            if let Some(message) = messages.last_mut() {
-                                if message.len() + link.len() + 1 > 4094 {
-                                    messages.push(link);
-                                } else {
-                                    message.push('\n');
-                                    message.push_str(&link);
-                                }
-                            } else {
-                                messages.push(link);
-                            };
+                            super::push_chunked(&mut messages, link);
 
                             future::ready(Ok(messages))
                         })
