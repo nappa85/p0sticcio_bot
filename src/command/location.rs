@@ -1,14 +1,13 @@
 use sea_orm::{ActiveModelTrait, ActiveValue, ConnectionTrait, EntityTrait};
-use tgbot::types::UserPeerId;
-
-use super::Error;
+use super::{Context, Error};
 
 use crate::database::location;
 
-pub async fn set<C>(conn: &C, user_id: UserPeerId, latitude: f32, longitude: f32) -> Result<(), Error>
+pub async fn set<C>(ctx: &Context<'_, C>, latitude: f32, longitude: f32) -> Result<(), Error>
 where
     C: ConnectionTrait,
 {
+    let Context { conn, user_id, .. } = *ctx;
     let exists = location::Entity::find_by_id(i64::from(user_id)).one(conn).await?.is_some();
 
     let am = location::ActiveModel {

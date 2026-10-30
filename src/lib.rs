@@ -15,7 +15,10 @@ use ingress_intel_rs::{
 use lru_time_cache::LruCache;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, TransactionTrait};
 use smol_str::{SmolStr, ToSmolStr};
-use tokio::{sync::mpsc, time};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time,
+};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
@@ -149,11 +152,26 @@ pub enum PortalOrCoords {
     Coords { lat: f64, lon: f64 },
 }
 
+/// a successfully scanned and stored portal
+#[derive(Debug)]
+pub struct ScannedPortal {
+    pub id: SmolStr,
+    pub title: SmolStr,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// receives the outcome of a scan requested by a user, `None` if stored data was already up to date
+pub type ScanReply = oneshot::Sender<Result<Option<ScannedPortal>, String>>;
+
+/// portal scan requests: what to scan, minimum data age in milliseconds, optional outcome receiver
+pub type ScanRequest = (PortalOrCoords, i64, Option<ScanReply>);
+
 pub async fn comm_survey(
     config: &config::Config,
     intel: &Intel<'_>,
     senders: &Senders,
-    portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
+    portal_tx: mpsc::UnboundedSender<ScanRequest>,
 ) {
     let mut interval = time::interval(Duration::from_secs(30)); // main comm interval
     let mut sent_cache: Vec<LruCache<SmolStr, ()>> =
@@ -193,6 +211,7 @@ pub async fn comm_survey(
                                         lon: plext.get_lon().unwrap(),
                                     },
                                     Utc::now().timestamp_millis(),
+                                    None,
                                 ))
                             {
                                 error!("Portal scan queue error: {err}");
@@ -239,48 +258,78 @@ pub async fn comm_survey(
     }
 }
 
-pub async fn portal_scanner<C>(
-    conn: &C,
-    intel: &Intel<'_>,
-    mut portal_rx: mpsc::UnboundedReceiver<(PortalOrCoords, i64)>,
-) where
+pub async fn portal_scanner<C>(conn: &C, intel: &Intel<'_>, mut portal_rx: mpsc::UnboundedReceiver<ScanRequest>)
+where
     C: ConnectionTrait + TransactionTrait,
 {
-    while let Some((poc, time)) = portal_rx.recv().await {
-        let id = match poc {
-            PortalOrCoords::Portal { id } => id,
-            PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(conn, intel, lat, lon).await {
-                Ok(Some(id)) => id,
-                _ => {
-                    warn!("Can't find portal on coordinates {lat},{lon}");
-                    continue;
-                }
-            },
-        };
+    while let Some((poc, time, reply)) = portal_rx.recv().await {
+        let (outcome, tried) = scan_portal(conn, intel, poc, time).await;
+        if let Some(reply) = reply {
+            // the requester could be gone, nothing to do in that case
+            let _ = reply.send(outcome);
+        }
+        // wait only if we have effectively tried to scan the portal
+        if tried {
+            time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+}
 
-        if let Ok(portal_revision) = database::portal::Entity::get_latest_revision(conn, &id)
-            .await
-            .map_err(|err| error!("Portal {id} retrieve error: {err}"))
-        {
-            // scan portal only if informations are outdated
-            if portal_revision.is_none() || portal_revision.as_ref().is_some_and(|revision| revision.timestamp < time) {
-                if let Ok(res) = get_portal_details_with_retry(intel, &id)
-                    .await
-                    .map_err(|err| error!("Portal {id} scan error: {err}"))
-                    && let Err(err) = database::portal::update_or_insert(
-                        conn,
-                        &id,
-                        Utc::now().timestamp_millis(),
-                        portal_revision,
-                        res.result,
-                    )
-                    .await
-                {
-                    error!("Portal {id} save error: {err}");
-                }
-                // wait only if we have effectively tried to scan the portal
-                time::sleep(Duration::from_secs(10)).await;
+/// returns the outcome and if Intel has been asked for portal details
+async fn scan_portal<C>(
+    conn: &C,
+    intel: &Intel<'_>,
+    poc: PortalOrCoords,
+    time: i64,
+) -> (Result<Option<ScannedPortal>, String>, bool)
+where
+    C: ConnectionTrait + TransactionTrait,
+{
+    let id = match poc {
+        PortalOrCoords::Portal { id } => id,
+        PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(conn, intel, lat, lon).await {
+            Ok(Some(id)) => id,
+            _ => {
+                warn!("Can't find portal on coordinates {lat},{lon}");
+                return (Err(format!("Can't find a portal on coordinates {lat},{lon}")), false);
             }
+        },
+    };
+
+    let portal_revision = match database::portal::Entity::get_latest_revision(conn, &id).await {
+        Ok(portal_revision) => portal_revision,
+        Err(err) => {
+            error!("Portal {id} retrieve error: {err}");
+            return (Err(format!("Database error: {err}")), false);
+        }
+    };
+
+    // scan portal only if informations are outdated
+    if portal_revision.as_ref().is_some_and(|revision| revision.timestamp >= time) {
+        return (Ok(None), false);
+    }
+
+    let res = match get_portal_details_with_retry(intel, &id).await {
+        Ok(res) => res,
+        Err(err) => {
+            error!("Portal {id} scan error: {err}");
+            return (Err(format!("Intel error: {err}")), true);
+        }
+    };
+
+    let scanned = ScannedPortal {
+        id: id.clone(),
+        title: res.result.title.clone(),
+        lat: res.result.latitude,
+        lon: res.result.longitude,
+    };
+    match database::portal::update_or_insert(conn, &id, Utc::now().timestamp_millis(), portal_revision, res.result)
+        .await
+    {
+        Ok(()) => (Ok(Some(scanned)), true),
+        Err(err) => {
+            error!("Portal {id} save error: {err}");
+            (Err(format!("Database error: {err}")), true)
         }
     }
 }
@@ -431,7 +480,7 @@ pub async fn map_survey<C>(
     config: &config::Config,
     intel: &Intel<'_>,
     senders: &Senders,
-    portal_tx: mpsc::UnboundedSender<(PortalOrCoords, i64)>,
+    portal_tx: mpsc::UnboundedSender<ScanRequest>,
 ) where
     C: ConnectionTrait,
 {
@@ -469,7 +518,7 @@ pub async fn map_survey<C>(
                         // enqueue for async scan if changed
                         if database::portal::should_scan(conn, &portal).await
                             && let Err(err) = portal_tx
-                                .send((PortalOrCoords::Portal { id: portal.id }, Utc::now().timestamp_millis()))
+                                .send((PortalOrCoords::Portal { id: portal.id }, Utc::now().timestamp_millis(), None))
                         {
                             error!("Portal scan enqueue error: {err}");
                         }

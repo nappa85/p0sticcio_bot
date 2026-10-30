@@ -4,19 +4,20 @@ use sea_orm::{ConnectionTrait, DbErr, StreamTrait};
 use tgbot::{
     api::{Client, ExecuteError},
     types::{
-        ChatPeerId, GetUpdates, Message, MessageData, ParseMode, ReplyParameters, SendMessage, Text, UpdateType,
-        UserPeerId,
+        ChatPeerId, GetUpdates, LinkPreviewOptions, Message, MessageData, ParseMode, ReplyParameters, SendMessage,
+        Text, UpdateType, UserPeerId,
     },
 };
-use tokio::time::sleep;
+use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error};
 
-use crate::config::Config;
+use crate::{ScanRequest, config::Config};
 
 mod help;
 mod location;
 mod log;
 mod portals;
+mod scan;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,7 +29,41 @@ pub enum Error {
     Query(DbErr, String),
 }
 
-pub async fn manage<C>(conn: &C, config: &Config, client: &Client)
+/// everything a command handler needs about the bot and the message it's answering
+pub struct Context<'a, C> {
+    pub conn: &'a C,
+    pub client: &'a Client,
+    pub portal_tx: &'a mpsc::UnboundedSender<ScanRequest>,
+    pub chat_id: ChatPeerId,
+    pub user_id: UserPeerId,
+    pub message_id: i64,
+}
+
+impl<C> Context<'_, C> {
+    /// replies to the command message as markdown without link previews, returns the sent message id
+    pub async fn reply(&self, text: impl Into<String>) -> Result<i64, Error> {
+        let message = self
+            .client
+            .execute(
+                SendMessage::new(self.chat_id, text)
+                    .with_reply_parameters(ReplyParameters::new(self.message_id))
+                    .with_parse_mode(ParseMode::Markdown)
+                    .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
+            )
+            .await?;
+        Ok(message.id)
+    }
+
+    /// replies with every message in order
+    pub async fn reply_all(&self, messages: Vec<String>) -> Result<(), Error> {
+        for message in messages {
+            self.reply(message).await?;
+        }
+        Ok(())
+    }
+}
+
+pub async fn manage<C>(conn: &C, config: &Config, client: &Client, portal_tx: &mpsc::UnboundedSender<ScanRequest>)
 where
     C: ConnectionTrait + StreamTrait,
 {
@@ -59,15 +94,16 @@ where
             }
 
             if let UpdateType::Message(msg) = &update.update_type && let Message { id, data, .. } = msg.as_ref() {
+                let ctx = Context { conn, client, portal_tx, chat_id, user_id, message_id: *id };
                 match data {
                     MessageData::Text(msg) => {
                         // here we don't retry because it also parses the input
-                        if let Err(err) = parse_message(client, conn, chat_id, user_id, *id, msg).await {
+                        if let Err(err) = parse_message(&ctx, msg).await {
                             error!("{err}\nuser_id: {user_id}\nmessage: {msg:?}");
                         }
                     }
                     MessageData::Location(location) => {
-                        if let Err(err) = location::set(conn, user_id, location.latitude, location.longitude).await {
+                        if let Err(err) = location::set(&ctx, location.latitude, location.longitude).await {
                             error!("{err}\nuser_id: {user_id}");
                         }
                     }
@@ -81,14 +117,7 @@ where
     }
 }
 
-async fn parse_message<C>(
-    client: &Client,
-    conn: &C,
-    chat_id: ChatPeerId,
-    user_id: UserPeerId,
-    message_id: i64,
-    msg: &Text,
-) -> Result<(), Error>
+async fn parse_message<C>(ctx: &Context<'_, C>, msg: &Text) -> Result<(), Error>
 where
     C: ConnectionTrait + StreamTrait,
 {
@@ -96,20 +125,15 @@ where
 
     let mut iter = msg.split_whitespace();
     let res = match iter.next().map(|msg| msg.split_once('@').map(|(pre, _post)| pre).unwrap_or(msg)) {
-        Some("/help") => help::execute(client, message_id, chat_id).await,
-        Some("/portals") => portals::execute(conn, client, message_id, chat_id, user_id, iter).await,
-        Some("/log") => log::execute(conn, client, message_id, chat_id, iter).await,
+        Some("/help") => help::execute(ctx).await,
+        Some("/portals") => portals::execute(ctx, iter).await,
+        Some("/log") => log::execute(ctx, iter).await,
+        Some("/scan") => scan::execute(ctx, iter).await,
         _ => return Ok(()),
     };
 
     if let Err(err) = res {
-        client
-            .execute(
-                SendMessage::new(chat_id, err.to_string())
-                    .with_reply_parameters(ReplyParameters::new(message_id))
-                    .with_parse_mode(ParseMode::Markdown),
-            )
-            .await?;
+        ctx.reply(err.to_string()).await?;
     }
 
     Ok(())

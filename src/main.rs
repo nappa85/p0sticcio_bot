@@ -27,11 +27,15 @@ async fn main() {
         .expect("Error building Telegram client for BOT_TOKEN2");
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
+    // created early, bot commands can request portal scans too
+    let (portal_tx, portal_rx) = mpsc::unbounded_channel();
+    let portal_tx2 = portal_tx.clone();
     let config2 = config.clone();
     let conn2 = conn.clone();
     tokio::spawn(async move {
         let tg_client1 = &tg_client1;
         let tg_client2 = &tg_client2;
+        let portal_tx2 = &portal_tx2;
 
         // we can send globally only 30 telegram messages per second
         let rate = ThrottleRate::new(30, Duration::from_secs(1));
@@ -65,10 +69,10 @@ async fn main() {
             _ = send_stream => {
                 error!("send stream terminated");
             }
-            _ = command::manage(&conn2, &config2, tg_client1) => {
+            _ = command::manage(&conn2, &config2, tg_client1, portal_tx2) => {
                 error!("Bot client1 terminated");
             }
-            _ = command::manage(&conn2, &config2, tg_client2) => {
+            _ = command::manage(&conn2, &config2, tg_client2, portal_tx2) => {
                 error!("Bot client2 terminated");
             }
         }
@@ -120,8 +124,6 @@ async fn main() {
     }
 
     intel.login().await.expect("Intel login failed");
-
-    let (portal_tx, portal_rx) = mpsc::unbounded_channel();
 
     let conn = &conn;
     let config = &config;

@@ -4,12 +4,7 @@ use chrono::{DateTime, Days, NaiveDate, NaiveDateTime};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Statement, Value,
 };
-use tgbot::{
-    api::Client,
-    types::{ChatPeerId, LinkPreviewOptions, ParseMode, ReplyParameters, SendMessage},
-};
-
-use super::Error;
+use super::{Context, Error};
 
 use crate::{
     database::{
@@ -34,16 +29,11 @@ const CURSOR_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.3f";
 type ResoKey = (String, i64);
 type ModKey = (String, String, String);
 
-pub async fn execute<C>(
-    conn: &C,
-    client: &Client,
-    message_id: i64,
-    chat_id: ChatPeerId,
-    name: impl Iterator<Item = &str>,
-) -> Result<(), Error>
+pub async fn execute<C>(ctx: &Context<'_, C>, name: impl Iterator<Item = &str>) -> Result<(), Error>
 where
     C: ConnectionTrait,
 {
+    let conn = ctx.conn;
     let mut words = name.collect::<Vec<_>>();
     // optional trailing date, shows only changes before it
     let before = words.last().and_then(|word| parse_before(word));
@@ -90,18 +80,7 @@ where
         }
     };
 
-    for message in messages {
-        client
-            .execute(
-                SendMessage::new(chat_id, message)
-                    .with_reply_parameters(ReplyParameters::new(message_id))
-                    .with_parse_mode(ParseMode::Markdown)
-                    .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
-            )
-            .await?;
-    }
-
-    Ok(())
+    ctx.reply_all(messages).await
 }
 
 /// portal id first, then exact case insensitive name match, substring name match as fallback

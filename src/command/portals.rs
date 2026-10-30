@@ -3,12 +3,7 @@ use std::{future, str::FromStr};
 use chumsky::prelude::*;
 use futures_util::{StreamExt, TryStreamExt};
 use sea_orm::{ConnectionTrait, EntityTrait, FromQueryResult, Statement, StreamTrait, Value};
-use tgbot::{
-    api::Client,
-    types::{ChatPeerId, LinkPreviewOptions, ParseMode, ReplyParameters, SendMessage, UserPeerId},
-};
-
-use super::Error;
+use super::{Context, Error};
 
 use crate::{
     database::{location, portal},
@@ -134,17 +129,11 @@ order by d.revision desc limit 1
     Ok((query, params))
 }
 
-pub async fn execute<C>(
-    conn: &C,
-    client: &Client,
-    message_id: i64,
-    chat_id: ChatPeerId,
-    user_id: UserPeerId,
-    filters: impl Iterator<Item = &str>,
-) -> Result<(), Error>
+pub async fn execute<C>(ctx: &Context<'_, C>, filters: impl Iterator<Item = &str>) -> Result<(), Error>
 where
     C: ConnectionTrait + StreamTrait,
 {
+    let Context { conn, user_id, .. } = *ctx;
     let query = filters.collect::<Vec<_>>().join(" ");
     let messages = match query_and_values(conn, i64::from(user_id), &query).await {
         Ok((query, params)) => {
@@ -174,18 +163,7 @@ where
     let messages =
         if messages.is_empty() { vec![String::from("No portal found matching given filters")] } else { messages };
 
-    for message in messages {
-        client
-            .execute(
-                SendMessage::new(chat_id, message)
-                    .with_reply_parameters(ReplyParameters::new(message_id))
-                    .with_parse_mode(ParseMode::Markdown)
-                    .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
-            )
-            .await?;
-    }
-
-    Ok(())
+    ctx.reply_all(messages).await
 }
 
 #[derive(PartialEq, Debug)]

@@ -1,15 +1,11 @@
-use tgbot::{
-    api::Client,
-    types::{ChatPeerId, ParseMode, ReplyParameters, SendMessage},
-};
-
-use super::Error;
+use super::{Context, Error};
 
 const HELP_MESSAGE: &str = r#"[P0sticcio Bot](https://github.com/nappa85/p0sticcio_bot/)
 
 /help - this message
 /portals `[filters]` - shows all portals matching given \[filters]
 /log `portal name or id` `[date]` - shows the latest captures, resonators and mods changes of the portal, optionally only before `date` (YYYY-MM-DD)
+/scan `intel link`, `lat,lon` or `portal id` - scans a portal, even outside the monitored area, and stores it
 
 `[filters]` can be any number of those:
 ● `{field}{comparison}{value}` - comparison between a field and a value, where comparisons can be
@@ -55,14 +51,7 @@ Retrieves the 10 oldest portals owned by player Niantic
 Simply send a position to the bot to use the `nearer` sorter
 "#;
 
-pub async fn execute(client: &Client, message_id: i64, chat_id: ChatPeerId) -> Result<(), Error> {
-    client
-        .execute(
-            SendMessage::new(chat_id, HELP_MESSAGE)
-                .with_reply_parameters(ReplyParameters::new(message_id))
-                .with_parse_mode(ParseMode::Markdown),
-        )
-        .await?;
-
+pub async fn execute<C>(ctx: &Context<'_, C>) -> Result<(), Error> {
+    ctx.reply(HELP_MESSAGE).await?;
     Ok(())
 }
