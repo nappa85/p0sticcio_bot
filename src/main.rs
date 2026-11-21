@@ -20,6 +20,7 @@ async fn main() {
     let conn = Database::connect("postgres://postgres:postgres@postgres/p0sticcio_bot")
         .await
         .expect("Database connection failed");
+    p0sticcio_bot::migrate(&conn).await.expect("Database migration failed");
 
     let tg_client1 = tgbot::api::Client::new(env::var("BOT_TOKEN1").expect("Missing env var BOT_TOKEN1"))
         .expect("Error building Telegram client for BOT_TOKEN1");
@@ -28,7 +29,7 @@ async fn main() {
 
     let (global_tx, global_rx) = mpsc::unbounded_channel();
     // created early, bot commands can request portal scans too
-    let (portal_tx, portal_rx) = mpsc::unbounded_channel();
+    let (portal_tx, portal_rx) = p0sticcio_bot::scan_queue();
     let portal_tx2 = portal_tx.clone();
     let config2 = config.clone();
     let conn2 = conn.clone();
@@ -50,9 +51,8 @@ async fn main() {
                     };
                     if let Err(err) = client
                         .execute(
-                            SendMessage::new(user_id as i64, msg.get_msg())
-                                .with_parse_mode(ParseMode::Markdown)
-                                .with_link_preview_options(LinkPreviewOptions::default().with_is_disabled(true)),
+                            SendMessage::new(user_id as i64, (msg.get_msg(), ParseMode::Markdown))
+                                .with_link_preview_options(LinkPreviewOptions::disabled()),
                         )
                         .await
                     {
@@ -130,7 +130,8 @@ async fn main() {
     let intel = &intel;
     let senders = &senders;
     tokio::select! {
-        _ = p0sticcio_bot::comm_survey(config, intel, senders, portal_tx.clone()) => {},
+        _ = p0sticcio_bot::comm_survey(conn, config, intel, senders, portal_tx.clone()) => {},
+        _ = p0sticcio_bot::virus_watcher(conn, portal_tx.clone()) => {},
         _ = p0sticcio_bot::portal_survey(config, intel, senders) => {},
         _ = p0sticcio_bot::map_survey(conn, config, intel, senders, portal_tx) => {},
         _ = p0sticcio_bot::portal_scanner(conn, intel, portal_rx) => {},

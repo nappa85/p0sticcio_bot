@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     hash::Hash,
     pin::pin,
     sync::atomic::{AtomicBool, Ordering},
@@ -9,16 +9,13 @@ use std::{
 use chrono::Utc;
 use ingress_intel_rs::{
     Intel,
-    entities::{IntelMod, IntelPortal, IntelResonator, IntelResult},
+    entities::{Entity, IntelMod, IntelPortal, IntelResonator, IntelResult},
     plexts::Tab,
 };
 use lru_time_cache::LruCache;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ConnectionTrait, TransactionTrait};
 use smol_str::{SmolStr, ToSmolStr};
-use tokio::{
-    sync::{mpsc, oneshot},
-    time,
-};
+use tokio::{sync::mpsc, time};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
@@ -27,7 +24,19 @@ pub mod config;
 mod database;
 mod dedup_flatten;
 mod entities;
+mod scan_queue;
 mod symbols;
+mod virus_watch;
+
+pub use scan_queue::{ScanQueue, ScanReceiver, scan_queue};
+pub use virus_watch::virus_watcher;
+
+/// applies the pending database migrations
+pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+    use sea_orm_migration::MigratorTrait;
+
+    database::migrations::Migrator::up(conn, None).await
+}
 
 pub type Senders = HashMap<u64, mpsc::UnboundedSender<Bot>>;
 
@@ -66,6 +75,7 @@ async fn get_portal_details_with_retry(
     unreachable!()
 }
 
+/// the portal exactly at the coordinates, from the database or else from Intel
 async fn get_entities_around_with_retry<C>(
     conn: &C,
     intel: &Intel<'_>,
@@ -75,9 +85,7 @@ async fn get_entities_around_with_retry<C>(
 where
     C: ConnectionTrait + TransactionTrait,
 {
-    if let Some(portal) = database::portal::Entity::find()
-        .filter(database::portal::Column::Latitude.eq(lat).and(database::portal::Column::Longitude.eq(lon)))
-        .one(conn)
+    if let Some(portal) = database::portal::Entity::find_by_coords(conn, lat, lon)
         .await
         .map_err(|err| error!("Portal retrieve error: {err}"))?
     {
@@ -86,70 +94,84 @@ where
         debug!("Can't find portal on coordinates {lat},{lon} on database, fallback to requesting");
     }
 
+    let portals = get_portals_around_with_retry(intel, lat, lon).await?;
+    match portals.iter().find(|portal| {
+        (lat.abs() - portal.entity.latitude.abs()).abs() < 0.000001
+            && (lon.abs() - portal.entity.longitude.abs()).abs() < 0.000001
+    }) {
+        Some(portal) => Ok(Some(portal.id.clone())),
+        None => {
+            debug!(
+                "Can't find portal on coordinates {lat},{lon} between {:?}",
+                portals
+                    .iter()
+                    .map(|portal| (&portal.id, portal.entity.latitude, portal.entity.longitude))
+                    .collect::<Vec<_>>()
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// every portal in the Intel tiles around the coordinates,
+/// retries while Intel answers with errors, also on single tiles to get them all
+async fn get_portals_around_with_retry(intel: &Intel<'_>, lat: f64, lon: f64) -> Result<Vec<Entity<IntelPortal>>, ()> {
     for i in 1..11 {
         let res = match intel.get_entities_around(lat, lon, Some(15), None, None, None).await {
             Ok(res) => res,
             Err(err) => {
-                error!("Error searching for portal on coordinates {lat},{lon} retry {i}: {err}");
+                error!("Error searching for portals around {lat},{lon} retry {i}: {err}");
                 continue;
             }
         };
 
-        match res
+        let tile_errors = res
             .result
             .map
             .values()
-            .flat_map(|entity| match entity {
-                IntelResult::Error(_) => &[],
-                IntelResult::Entities(e) => e.entities.as_slice(),
+            .filter_map(|entity| match entity {
+                IntelResult::Error(err) => Some(&err.error),
+                IntelResult::Entities(_) => None,
             })
-            .filter_map(|entity| entity.as_portal())
-            .find_map(|portal| {
-                if (lat.abs() - portal.entity.latitude.abs()).abs() < 0.000001
-                    && (lon.abs() - portal.entity.longitude.abs()).abs() < 0.000001
-                {
-                    Some(portal.id.as_str())
-                } else {
-                    None
-                }
-            }) {
-            Some(id) => return Ok(Some(id.to_smolstr())),
-            None => {
-                let retry = res.result.map.values().any(|entity| matches!(entity, IntelResult::Error(_)));
-                debug!(
-                    "Can't find portal on coordinates {lat},{lon} retry {i} between {:?}",
-                    res.result
-                        .map
-                        .into_values()
-                        .map(|entity| match entity {
-                            IntelResult::Error(err) => Err(err.error),
-                            IntelResult::Entities(e) => Ok(e
-                                .entities
-                                .into_iter()
-                                .filter_map(|entity| entity.into_portal().map(|portal| (
-                                    portal.id,
-                                    portal.entity.latitude,
-                                    portal.entity.longitude
-                                )))
-                                .collect::<Vec<_>>()),
-                        })
-                        .collect::<Vec<_>>()
-                );
-                if retry {
-                    continue;
-                } else {
-                    break;
-                }
-            }
+            .collect::<Vec<_>>();
+        if !tile_errors.is_empty() && i < 10 {
+            debug!("Tile errors searching for portals around {lat},{lon} retry {i}: {tile_errors:?}");
+            continue;
         }
+
+        return Ok(res
+            .result
+            .map
+            .into_values()
+            .flat_map(|entity| match entity {
+                IntelResult::Error(_) => vec![],
+                IntelResult::Entities(e) => e.entities,
+            })
+            .filter_map(|entity| entity.into_portal())
+            .collect());
     }
-    Ok(None)
+    Err(())
 }
 
 #[derive(Debug)]
 pub enum PortalOrCoords {
-    Portal { id: SmolStr },
-    Coords { lat: f64, lon: f64 },
+    Portal {
+        id: SmolStr,
+    },
+    /// the portal exactly at the coordinates
+    Coords {
+        lat: f64,
+        lon: f64,
+    },
+    /// every portal around the coordinates
+    Area {
+        lat: f64,
+        lon: f64,
+    },
+    /// a portal watched after a virus, stored only if something other than health and energy changed
+    Watch {
+        id: SmolStr,
+    },
 }
 
 /// a successfully scanned and stored portal
@@ -161,18 +183,32 @@ pub struct ScannedPortal {
     pub lon: f64,
 }
 
-/// receives the outcome of a scan requested by a user, `None` if stored data was already up to date
-pub type ScanReply = oneshot::Sender<Result<Option<ScannedPortal>, String>>;
+/// progress of a scan requested by a user
+#[derive(Debug)]
+pub enum ScanUpdate {
+    /// outcome of a portal scan, `None` if stored data was already up to date
+    Portal(Result<Option<ScannedPortal>, String>),
+    /// outcome of an area lookup, the number of portals that are going to be scanned, nearest first
+    Area(Result<usize, String>),
+    /// outcome of the scan of a portal of the area, `portal` is how the Intel map shows it
+    AreaPortal { portal: ScannedPortal, outcome: Result<Option<ScannedPortal>, String> },
+}
+
+/// receives the updates of a scan requested by a user
+pub type ScanReply = mpsc::UnboundedSender<ScanUpdate>;
 
 /// portal scan requests: what to scan, minimum data age in milliseconds, optional outcome receiver
 pub type ScanRequest = (PortalOrCoords, i64, Option<ScanReply>);
 
-pub async fn comm_survey(
+pub async fn comm_survey<C>(
+    conn: &C,
     config: &config::Config,
     intel: &Intel<'_>,
     senders: &Senders,
-    portal_tx: mpsc::UnboundedSender<ScanRequest>,
-) {
+    portal_tx: ScanQueue,
+) where
+    C: ConnectionTrait,
+{
     let mut interval = time::interval(Duration::from_secs(30)); // main comm interval
     let mut sent_cache: Vec<LruCache<SmolStr, ()>> =
         vec![LruCache::with_expiry_duration(Duration::from_secs(120)); config.zones.len()]; //2 minutes cache
@@ -232,6 +268,19 @@ pub async fn comm_survey(
                         );
                     }
 
+                    for (lat, lon, time) in msgs.iter().filter_map(entities::Plext::virus) {
+                        match database::portal_watch::on_virus(conn, lat, lon, time).await {
+                            Ok(database::portal_watch::Virus::Started) => {
+                                info!("Virus on portal at {lat},{lon}, it will be watched after the cooldown")
+                            }
+                            Ok(database::portal_watch::Virus::Second) => {
+                                info!("Second virus on portal at {lat},{lon}, watch ended")
+                            }
+                            Ok(database::portal_watch::Virus::Known) => {}
+                            Err(err) => error!("Portal watch error: {err}"),
+                        }
+                    }
+
                     for msg in msgs.iter().filter(|m| !m.has_duplicates(&msgs)) {
                         if sent_cache[index].notify_insert(msg.to_smolstr(), ()).0.is_none() {
                             for (id, filter) in &zone.users {
@@ -258,44 +307,115 @@ pub async fn comm_survey(
     }
 }
 
-pub async fn portal_scanner<C>(conn: &C, intel: &Intel<'_>, mut portal_rx: mpsc::UnboundedReceiver<ScanRequest>)
+pub async fn portal_scanner<C>(conn: &C, intel: &Intel<'_>, mut portal_rx: ScanReceiver)
 where
     C: ConnectionTrait + TransactionTrait,
 {
-    while let Some((poc, time, reply)) = portal_rx.recv().await {
-        let (outcome, tried) = scan_portal(conn, intel, poc, time).await;
-        if let Some(reply) = reply {
-            // the requester could be gone, nothing to do in that case
-            let _ = reply.send(outcome);
+    let mut areas = VecDeque::new();
+    loop {
+        // area scans go on one portal at a time alternated with the queue, so they don't hold other scans for long
+        let request = if areas.is_empty() {
+            let Some(request) = portal_rx.recv().await else {
+                break;
+            };
+            Some(request)
+        } else {
+            portal_rx.try_recv()
+        };
+
+        if let Some((target, time, reply)) = request {
+            match target {
+                PortalOrCoords::Area { lat, lon } => areas.extend(find_area(intel, lat, lon, time, reply).await),
+                PortalOrCoords::Portal { id } => report(reply, scan_portal(conn, intel, id, time, false).await).await,
+                PortalOrCoords::Watch { id } => report(reply, scan_portal(conn, intel, id, time, true).await).await,
+                PortalOrCoords::Coords { lat, lon } => {
+                    let scan = match get_entities_around_with_retry(conn, intel, lat, lon).await {
+                        Ok(Some(id)) => scan_portal(conn, intel, id, time, false).await,
+                        _ => {
+                            warn!("Can't find portal on coordinates {lat},{lon}");
+                            (Err(format!("Can't find a portal on coordinates {lat},{lon}")), false)
+                        }
+                    };
+                    report(reply, scan).await;
+                }
+            }
         }
-        // wait only if we have effectively tried to scan the portal
-        if tried {
-            time::sleep(Duration::from_secs(10)).await;
+
+        if let Some(area) = areas.front_mut() {
+            match area.portals.next() {
+                Some(portal) => {
+                    let (outcome, tried) = scan_portal(conn, intel, portal.id.clone(), area.time, false).await;
+                    notify(area.reply.as_ref(), ScanUpdate::AreaPortal { portal, outcome });
+                    pause(tried).await;
+                }
+                None => {
+                    areas.pop_front();
+                }
+            }
         }
     }
 }
 
-/// returns the outcome and if Intel has been asked for portal details
+fn notify(reply: Option<&ScanReply>, update: ScanUpdate) {
+    if let Some(reply) = reply {
+        // the requester could be gone, nothing to do in that case
+        let _ = reply.send(update);
+    }
+}
+
+async fn report(reply: Option<ScanReply>, (outcome, tried): (Result<Option<ScannedPortal>, String>, bool)) {
+    notify(reply.as_ref(), ScanUpdate::Portal(outcome));
+    pause(tried).await;
+}
+
+/// wait only if we have effectively tried to scan the portal
+async fn pause(tried: bool) {
+    if tried {
+        time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
+/// an area scan in progress
+struct AreaScan {
+    /// nearest first
+    portals: std::vec::IntoIter<ScannedPortal>,
+    time: i64,
+    reply: Option<ScanReply>,
+}
+
+/// looks for the portals around the coordinates, None if there's nothing to scan
+async fn find_area(intel: &Intel<'_>, lat: f64, lon: f64, time: i64, reply: Option<ScanReply>) -> Option<AreaScan> {
+    let Ok(portals) = get_portals_around_with_retry(intel, lat, lon).await else {
+        warn!("Can't get portals around {lat},{lon}");
+        notify(reply.as_ref(), ScanUpdate::Area(Err(format!("Can't get portals around {lat},{lon} from Intel"))));
+        return None;
+    };
+    let mut portals = portals
+        .into_iter()
+        .map(|portal| ScannedPortal {
+            id: portal.id,
+            title: portal.entity.title,
+            lat: portal.entity.latitude,
+            lon: portal.entity.longitude,
+        })
+        .collect::<Vec<_>>();
+    portals.sort_by(|a, b| calc_dist((lat, lon), (a.lat, a.lon)).total_cmp(&calc_dist((lat, lon), (b.lat, b.lon))));
+    notify(reply.as_ref(), ScanUpdate::Area(Ok(portals.len())));
+    (!portals.is_empty()).then(|| AreaScan { portals: portals.into_iter(), time, reply })
+}
+
+/// returns the outcome and if Intel has been asked for portal details,
+/// with `only_if_changed` nothing is stored when only health and resonators energy changed
 async fn scan_portal<C>(
     conn: &C,
     intel: &Intel<'_>,
-    poc: PortalOrCoords,
+    id: SmolStr,
     time: i64,
+    only_if_changed: bool,
 ) -> (Result<Option<ScannedPortal>, String>, bool)
 where
     C: ConnectionTrait + TransactionTrait,
 {
-    let id = match poc {
-        PortalOrCoords::Portal { id } => id,
-        PortalOrCoords::Coords { lat, lon } => match get_entities_around_with_retry(conn, intel, lat, lon).await {
-            Ok(Some(id)) => id,
-            _ => {
-                warn!("Can't find portal on coordinates {lat},{lon}");
-                return (Err(format!("Can't find a portal on coordinates {lat},{lon}")), false);
-            }
-        },
-    };
-
     let portal_revision = match database::portal::Entity::get_latest_revision(conn, &id).await {
         Ok(portal_revision) => portal_revision,
         Err(err) => {
@@ -316,6 +436,17 @@ where
             return (Err(format!("Intel error: {err}")), true);
         }
     };
+
+    if only_if_changed && let Some(old) = &portal_revision {
+        match database::portal::differs(conn, old, &res.result).await {
+            Ok(true) => {}
+            Ok(false) => return (Ok(None), true),
+            Err(err) => {
+                error!("Portal {id} compare error: {err}");
+                return (Err(format!("Database error: {err}")), true);
+            }
+        }
+    }
 
     let scanned = ScannedPortal {
         id: id.clone(),
@@ -480,7 +611,7 @@ pub async fn map_survey<C>(
     config: &config::Config,
     intel: &Intel<'_>,
     senders: &Senders,
-    portal_tx: mpsc::UnboundedSender<ScanRequest>,
+    portal_tx: ScanQueue,
 ) where
     C: ConnectionTrait,
 {

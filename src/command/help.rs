@@ -5,7 +5,8 @@ const HELP_MESSAGE: &str = r#"[P0sticcio Bot](https://github.com/nappa85/p0sticc
 /help - this message
 /portals `[filters]` - shows all portals matching given \[filters]
 /log `portal name or id` `[date]` - shows the latest captures, resonators and mods changes of the portal, optionally only before `date` (YYYY-MM-DD)
-/scan `intel link`, `lat,lon` or `portal id` - scans a portal, even outside the monitored area, and stores it
+/scan `portal id` - scans a portal, even outside the monitored area, and stores it
+/scan `intel link` or `lat,lon` - scans and stores every portal around that point (about 2.5km×2.5km), nearest first
 
 `[filters]` can be any number of those:
 ● `{field}{comparison}{value}` - comparison between a field and a value, where comparisons can be
@@ -43,6 +44,8 @@ Available fields are:
 ● `mod_owner` - mod owner, string
 ● `mod_name` - mod name, string
 ● `mod_rarity` - mod rarity, string
+
+Strings can be quoted with `"`, `“”`, `„“` or `«»`
 
 Example
 /portals owner="Niantic" older 10

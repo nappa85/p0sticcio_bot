@@ -401,6 +401,14 @@ impl<'a> Plext<'a> {
         )
     }
 
+    /// coordinates of the portal and time of a probable virus
+    pub fn virus(&self) -> Option<(f64, f64, i64)> {
+        match self {
+            Plext::MaybeVirus { portal, time, .. } => Some((portal.lat, portal.lon, *time)),
+            _ => None,
+        }
+    }
+
     pub fn get_lat(&self) -> Option<f64> {
         match self {
             Plext::Captured { portal, .. }

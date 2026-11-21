@@ -412,4 +412,96 @@ mod tests {
         let block = describe(&new, Some(&old)).unwrap();
         assert!(block.contains("neutralized") && !block.contains('►'), "{block}");
     }
+
+    mod database {
+        use super::super::*;
+        use crate::database::testing::{Spec, db, scan};
+
+        const FONTANA: Spec<'static> = Spec {
+            title: "Fontana",
+            faction: "E",
+            lat: 45.1,
+            lon: 11.1,
+            level: 1,
+            health: 100,
+            owner: Some("alice"),
+            resonators: &[("alice", 8, 6000)],
+            mods: &[],
+        };
+
+        async fn seed(conn: &sea_orm::DatabaseConnection) {
+            // day 1, 2026-07-01: first scan
+            scan(conn, "aa.1", 1_782_864_000_000, FONTANA).await;
+            // energy only change, skipped
+            scan(conn, "aa.1", 1_782_867_600_000, Spec { health: 50, ..FONTANA }).await;
+            // day 2: bob adds a resonator and a mod
+            scan(
+                conn,
+                "aa.1",
+                1_782_950_400_000,
+                Spec {
+                    resonators: &[("alice", 8, 6000), ("bob", 7, 5000)],
+                    mods: &[("bob", "Heat Sink", "VERY_RARE")],
+                    ..FONTANA
+                },
+            )
+            .await;
+            // day 3: carol captures it
+            scan(
+                conn,
+                "aa.1",
+                1_783_036_800_000,
+                Spec { faction: "R", owner: Some("carol"), resonators: &[("carol", 6, 3000)], ..FONTANA },
+            )
+            .await;
+            scan(conn, "bb.1", 1_782_864_000_000, Spec { title: "Fontana Vecchia", lat: 45.2, ..FONTANA }).await;
+            scan(conn, "cc.1", 1_782_864_000_000, Spec { title: "Chiesa", lat: 45.3, ..FONTANA }).await;
+        }
+
+        fn ids(portals: &[portal::Model]) -> Vec<&str> {
+            portals.iter().map(|portal| portal.portal_id.as_str()).collect()
+        }
+
+        #[tokio::test]
+        async fn find() {
+            let Some(db) = db().await else { return };
+            let conn = &db.conn;
+            seed(conn).await;
+
+            assert_eq!(ids(&find_portals(conn, "cc.1").await.unwrap()), ["cc.1"]);
+            // exact name wins over substring
+            assert_eq!(ids(&find_portals(conn, "fontana").await.unwrap()), ["aa.1"]);
+            assert_eq!(ids(&find_portals(conn, "ontana").await.unwrap()), ["aa.1", "bb.1"]);
+            assert!(find_portals(conn, "Duomo").await.unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn log() {
+            let Some(db) = db().await else { return };
+            let conn = &db.conn;
+            seed(conn).await;
+            let portal = find_portals(conn, "aa.1").await.unwrap().remove(0);
+
+            let blocks = portal_log(conn, &portal, None).await.unwrap();
+            assert_eq!(blocks.len(), 4, "{blocks:#?}");
+            assert!(blocks[0].contains("[Fontana]"), "{}", blocks[0]);
+            assert!(blocks[1].starts_with("`2026-07-03 00:00` "), "{}", blocks[1]);
+            assert!(blocks[1].contains("captured by [carol]"), "{}", blocks[1]);
+            assert!(blocks[1].contains("+L6 resonator by"), "{}", blocks[1]);
+            assert!(!blocks[1].contains(" -"), "{}", blocks[1]);
+            assert!(blocks[2].starts_with("`2026-07-02 00:00` "), "{}", blocks[2]);
+            assert!(blocks[2].contains("+L7 resonator by"), "{}", blocks[2]);
+            assert!(blocks[2].contains("+Very Rare Heat Sink by"), "{}", blocks[2]);
+            assert!(blocks[3].starts_with("`2026-07-01 00:00` "), "{}", blocks[3]);
+            assert!(blocks[3].contains("first recorded"), "{}", blocks[3]);
+
+            // only up to the end of 2026-07-01
+            let blocks = portal_log(conn, &portal, parse_before("2026-07-01")).await.unwrap();
+            assert_eq!(blocks.len(), 2, "{blocks:#?}");
+            assert!(blocks[1].contains("first recorded"), "{}", blocks[1]);
+
+            let blocks = portal_log(conn, &portal, parse_before("2020-01-01")).await.unwrap();
+            assert_eq!(blocks[1], "No recorded changes in the scanned period");
+        }
+    }
 }
